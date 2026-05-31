@@ -90,7 +90,7 @@ Reading and commenting on open pull requests is a valuable contribution that doe
 ### Prerequisites
 
 - Node.js 20 or higher
-- Docker and Docker Compose
+- PostgreSQL installed locally for the first implementation pass
 - Git
 
 ### Clone and install
@@ -99,12 +99,6 @@ Reading and commenting on open pull requests is a valuable contribution that doe
 git clone https://github.com/[yourhandle]/ledgerise.git
 cd ledgerise
 npm install
-```
-
-### Start local dependencies
-
-```bash
-docker compose up -d postgres redis
 ```
 
 ### Configure environment
@@ -130,7 +124,7 @@ npm test
 ### Run tests for a specific adapter
 
 ```bash
-npm test -- --filter adapters/inbound/paystack-webhook
+npm test -- --filter adapters/inbound/generic-webhook
 ```
 
 ---
@@ -139,33 +133,46 @@ npm test -- --filter adapters/inbound/paystack-webhook
 
 ```
 ledgerise/
+├── apps/
+│   ├── web/             # React frontend
+│   ├── api/             # Node/TypeScript HTTP API
+│   └── worker/          # Scheduled jobs
 ├── core/
+│   ├── schema/          # Canonical schema validator
+│   ├── ingestion/       # Transaction ingestion
 │   ├── engine/          # Journal generation engine
-│   ├── validator/       # Canonical schema validator
-│   └── scheduler/       # Engine run scheduler
+│   ├── posting/         # Posting queue and retries
+│   ├── audit/           # Audit log
+│   └── permissions/     # Roles and access policies
 ├── adapters/
 │   ├── inbound/         # Source system adapters
 │   │   └── [adapter-name]/
-│   │       ├── index.ts
+│   │       ├── adapter.json
+│   │       ├── src/
 │   │       ├── fixtures/
 │   │       ├── tests/
 │   │       └── README.md
 │   └── outbound/        # Accounting system adapters
 │       └── [adapter-name]/
-│           ├── index.ts
+│           ├── adapter.json
+│           ├── src/
 │           ├── fixtures/
 │           ├── tests/
 │           └── README.md
+├── packages/
+│   ├── adapter-sdk/
+│   ├── canonical-types/
+│   └── test-fixtures/
+├── infra/
+│   ├── migrations/
+│   └── seed/
 ├── schemas/
 │   └── transaction.schema.json
 ├── docs/
-│   ├── SCHEMA_REFERENCE.md
-│   └── self-hosting.md
-├── ui/                  # React frontend
+│   └── SCHEMA_REFERENCE.md
 ├── ADAPTER_SPEC.md
 ├── CONTRIBUTING.md
-├── README.md
-└── docker-compose.yml
+└── README.md
 ```
 
 Each adapter lives in its own directory under `adapters/inbound/` or `adapters/outbound/`. The directory name is the adapter name and must follow the naming convention described in Section 7.
@@ -185,11 +192,11 @@ The [ADAPTER_SPEC.md](ADAPTER_SPEC.md) is the authoritative reference for what e
 Adapter directory names follow this pattern: `{source-system}-{mode}`
 
 Examples:
-- `paystack-webhook`
-- `flutterwave-webhook`
-- `mpesa-poll`
-- `vtpass-csv`
-- `quickbooks-outbound`
+- `generic-webhook`
+- `generic-csv`
+- `generic-poll`
+- `zoho-books`
+- `generic-journal-csv`
 
 One adapter per mode. If a source system supports both webhook and poll, create two separate adapters.
 
@@ -495,9 +502,9 @@ npm run test:coverage # Coverage report
 **Test naming convention:**
 
 ```typescript
-describe('paystack-webhook adapter', () => {
+describe('generic-webhook adapter', () => {
   describe('normalize()', () => {
-    it('returns a valid canonical record for a settled charge.success event', () => { });
+    it('returns a valid canonical record for a settled payment event', () => { });
     it('returns a failure envelope when amount is missing', () => { });
     it('sets source.environment to test for sandbox transactions', () => { });
   });

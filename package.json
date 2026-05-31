@@ -1,0 +1,29 @@
+{
+  "name": "ledgerise",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Configurable double-entry automation for payment operators.",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "adapters/inbound/*",
+    "adapters/outbound/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:web": "npm run dev -w apps/web",
+    "dev:api": "npm run dev -w apps/api",
+    "dev:worker": "npm run dev -w apps/worker",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "typescript": "^5.4.0"
+  }
+}

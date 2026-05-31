@@ -1,0 +1,11 @@
+{
+  "name": "zoho-books",
+  "version": "0.1.0",
+  "direction": "outbound",
+  "target_system": "zoho-books",
+  "modes": ["api"],
+  "currency_codes": ["NGN", "KES", "GHS", "USD"],
+  "runtime": {
+    "type": "internal"
+  }
+}

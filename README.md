@@ -90,11 +90,14 @@ cd ledgerise
 # Copy and configure environment variables
 cp .env.example .env
 
-# Start with Docker Compose
-docker compose up
+# Install dependencies
+npm install
+
+# Start the web, API, and worker workspaces
+npm run dev
 ```
 
-Full self-hosted setup guide: [docs/self-hosting.md](docs/self-hosting.md)
+Ledgerise targets Node.js, TypeScript, React, and a relational database. PostgreSQL is the primary database target for the first implementation pass; MySQL support can be added behind the same data-access boundary later.
 
 ### Cloud-Hosted
 
@@ -172,21 +175,34 @@ To contribute an adapter to the official registry, open a pull request with your
 
 ```
 ledgerise/
+├── apps/
+│   ├── web/             # React finance/admin UI
+│   ├── api/             # Node/TypeScript HTTP API
+│   └── worker/          # Scheduled jobs and posting retries
 ├── core/
+│   ├── schema/          # Canonical schema validation
+│   ├── ingestion/       # Normalized transaction storage
 │   ├── engine/          # Journal generation engine
-│   ├── validator/       # Canonical schema validator
-│   └── scheduler/       # Engine run scheduler
+│   ├── posting/         # Posting queue and retries
+│   ├── audit/           # Immutable audit events
+│   └── permissions/     # Roles and policies
 ├── adapters/
-│   ├── inbound/         # Source system adapters
-│   └── outbound/        # Accounting system adapters
+│   ├── inbound/         # generic-webhook, generic-csv, generic-poll
+│   └── outbound/        # zoho-books, generic-journal-csv
+├── packages/
+│   ├── adapter-sdk/
+│   ├── canonical-types/
+│   └── test-fixtures/
+├── infra/
+│   ├── migrations/
+│   └── seed/
 ├── schemas/
 │   └── transaction.schema.json
 ├── docs/
-│   ├── SCHEMA_REFERENCE.md
-│   └── self-hosting.md
+│   └── SCHEMA_REFERENCE.md
 ├── ADAPTER_SPEC.md
 ├── CONTRIBUTING.md
-└── docker-compose.yml
+└── README.md
 ```
 
 ---

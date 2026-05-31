@@ -1,0 +1,11 @@
+{
+  "name": "generic-journal-csv",
+  "version": "0.1.0",
+  "direction": "outbound",
+  "target_system": "generic",
+  "modes": ["file-export"],
+  "currency_codes": ["NGN", "KES", "GHS", "USD"],
+  "runtime": {
+    "type": "internal"
+  }
+}

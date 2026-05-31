@@ -1,0 +1,11 @@
+{
+  "name": "generic-csv",
+  "version": "0.1.0",
+  "direction": "inbound",
+  "source_system": "generic",
+  "modes": ["file-import"],
+  "currency_codes": ["NGN", "KES", "GHS", "USD"],
+  "runtime": {
+    "type": "internal"
+  }
+}
