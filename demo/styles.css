@@ -115,12 +115,10 @@ button, input, select, textarea { font-family: inherit; }
 
 .logo-mark {
   width: 26px; height: 26px;
-  background: var(--color-primary);
-  border-radius: var(--r-md);
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
 }
-.logo-mark svg { width: 14px; height: 14px; color: #fff; }
+.logo-mark img { width: 26px; height: 26px; display: block; border-radius: var(--r-md); }
 
 .logo-wordmark { font-size: var(--text-sm); font-weight: 700; color: var(--color-text); letter-spacing: -.025em; }
 .logo-version {
