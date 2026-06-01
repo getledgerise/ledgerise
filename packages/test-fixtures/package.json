@@ -2,5 +2,14 @@
   "name": "@ledgerise/test-fixtures",
   "version": "0.1.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ledgerise/canonical-types": "0.1.0"
+  }
 }

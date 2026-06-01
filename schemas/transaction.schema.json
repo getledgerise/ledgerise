@@ -83,7 +83,7 @@
 
     "type": {
       "description": "The business type of the transaction using dot notation (category.subcategory). Adapters must normalize source-specific types to one of the standard enum values below where possible. For operator-specific edge cases not covered by the standard taxonomy, custom types are permitted provided they follow dot notation convention (e.g. 'payment.toll', 'agency.crop-insurance') AND a corresponding mapping rule exists in the operator's mapping configuration. The engine will flag any type, standard or custom, that has no matching mapping rule as 'unmapped' and hold it for manual review.",
-      "oneOf": [
+      "anyOf": [
         {
           "type": "string",
           "enum": [

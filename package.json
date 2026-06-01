@@ -5,6 +5,7 @@
   "description": "Configurable double-entry automation for payment operators.",
   "workspaces": [
     "apps/*",
+    "core/*",
     "packages/*",
     "adapters/inbound/*",
     "adapters/outbound/*"
@@ -17,7 +18,11 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "verify:postgres": "node scripts/verify-postgres-ingestion.mjs",
+    "verify:generic-webhook": "node scripts/verify-generic-webhook.mjs",
+    "verify:generic-csv": "node scripts/verify-generic-csv.mjs",
+    "verify:generic-poll": "node scripts/verify-generic-poll.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -26,8 +26,67 @@ DATABASE_URL=mysql://ledgerise:ledgerise@localhost:3306/ledgerise
 
 ## Migrations
 
-Migration files will live in `infra/migrations/` once the database toolkit is selected.
+Migration files live in `infra/migrations/`.
+
+The current files are plain SQL reference migrations for PostgreSQL. A migration runner can be selected later without changing the SQL contract.
+
+Apply the current migration manually with `psql`:
+
+```bash
+psql "$DATABASE_URL" -f infra/migrations/0001_core_ingestion.sql
+```
 
 ## Seed Data
 
-Seed scripts and sample data will live in `infra/seed/`.
+Seed scripts and sample data live in `infra/seed/`.
+
+`0001_local_operator_and_adapters.sql` creates a local operator and registers the default MVP adapters.
+
+Apply the current seed manually with `psql`:
+
+```bash
+psql "$DATABASE_URL" -f infra/seed/0001_local_operator_and_adapters.sql
+```
+
+When `DATABASE_URL` is set, `apps/api` uses PostgreSQL for ingestion storage. It resolves the default operator in this order:
+
+1. `DEFAULT_OPERATOR_ID`
+2. `DEFAULT_OPERATOR_SLUG`
+3. `local-operator`
+
+Without `DATABASE_URL`, the API uses the in-memory repository for local scaffold checks.
+
+After applying the migration and seed, verify ingestion behavior against PostgreSQL:
+
+```bash
+npm run build
+DATABASE_URL="$DATABASE_URL" npm run verify:postgres
+```
+
+This starts the built API on a temporary port and verifies valid ingestion, duplicate handling, invalid ingestion errors, transaction list/detail reads, and ingestion error reads.
+
+## Ingestion List Query Parameters
+
+`GET /api/transactions` supports:
+
+- `limit`
+- `offset`
+- `status`
+- `posting_status`
+- `product_line`
+- `biller`
+- `adapter`
+- `environment`
+- `occurred_from`
+- `occurred_to`
+
+`GET /api/ingestion-errors` supports:
+
+- `limit`
+- `offset`
+- `adapter`
+- `error_type`
+- `source_system`
+- `source_id`
+- `occurred_from`
+- `occurred_to`

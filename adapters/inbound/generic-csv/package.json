@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/src/index.js",
+  "types": "src/index.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@ledgerise/adapter-sdk": "0.1.0",
-    "@ledgerise/canonical-types": "0.1.0"
+    "@ledgerise/canonical-types": "0.1.0",
+    "@ledgerise/core-schema": "0.1.0"
   }
 }

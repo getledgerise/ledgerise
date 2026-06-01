@@ -13,3 +13,5 @@ Minimum fixture categories:
 - Transaction with fee split
 - CSV row with validation error
 - Poll response with cursor
+
+The shared fixture exports live in `src/index.ts`.
