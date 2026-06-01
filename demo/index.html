@@ -140,10 +140,9 @@
           </select>
           <select class="fi" style="width:170px">
             <option>All Adapters</option>
-            <option>paystack-webhook</option>
-            <option>flutterwave-webhook</option>
+            <option>webhook-adapter</option>
             <option>csv-import</option>
-            <option>mpesa-poll</option>
+            <option>poll-adapter</option>
           </select>
           <select class="fi" style="width:120px">
             <option>Environment</option>
@@ -794,7 +793,18 @@
         <div class="settings-layout">
           <aside class="settings-sidebar">
             <div class="settings-sidebar-label">Configuration</div>
-            <button class="settings-nav-btn active" onclick="switchSettingsTab('adapters',this)">
+            <button class="settings-nav-btn active" onclick="switchSettingsTab('schema',this)">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                stroke-linejoin="round">
+                <path d="M4 2.5h6l2 2v9H4z" />
+                <path d="M10 2.5v2h2" />
+                <path d="M6.5 7h3" />
+                <path d="M6.5 9.5h3" />
+                <path d="M6.5 12h2" />
+              </svg>
+              Schema
+            </button>
+            <button class="settings-nav-btn" onclick="switchSettingsTab('adapters',this)">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
                 stroke-linejoin="round">
                 <rect x="1" y="4" width="14" height="8" rx="1.5" />
@@ -810,18 +820,7 @@
                 <line x1="5" y1="8" x2="11" y2="8" />
                 <line x1="5" y1="10.5" x2="9" y2="10.5" />
               </svg>
-              COA Reference
-            </button>
-            <button class="settings-nav-btn" onclick="switchSettingsTab('schema',this)">
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-                stroke-linejoin="round">
-                <path d="M4 2.5h6l2 2v9H4z" />
-                <path d="M10 2.5v2h2" />
-                <path d="M6.5 7h3" />
-                <path d="M6.5 9.5h3" />
-                <path d="M6.5 12h2" />
-              </svg>
-              Schema &amp; Types
+              Accounts
             </button>
             <button class="settings-nav-btn" onclick="switchSettingsTab('users',this)">
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
@@ -843,7 +842,7 @@
           <div class="settings-content">
 
             <!-- ADAPTERS -->
-            <div class="settings-panel active" id="settings-adapters">
+            <div class="settings-panel" id="settings-adapters">
               <h2>Adapters</h2>
               <p class="panel-desc">Registered inbound and outbound adapters. All adapters are stateless — deduplication
                 is handled by the engine using <code
@@ -861,86 +860,25 @@
                           <line x1="2" y1="10" x2="22" y2="10" />
                         </svg></div>
                       <div>
-                        <div class="adapter-name">paystack-webhook</div>
-                        <div class="adapter-desc">Receives charge.success and transfer events from Paystack · Inbound ·
+                        <div class="adapter-name">webhook-adapter</div>
+                        <div class="adapter-desc">Receives mapped JSON payloads from any source system · Inbound ·
                           Webhook</div>
                         <div class="adapter-sub">
                           <span class="badge healthy"><span class="badge-dot"></span>Healthy</span>
-                          <span>·</span><span>84ms latency</span>
-                          <span>·</span><span>Last run: 2m ago</span>
-                          <span>·</span><span>v1.0.0</span>
+                          <span>·</span><span>41ms latency</span>
+                          <span>·</span><span>Last event: 2m ago</span>
+                          <span>·</span><span>v0.1.0</span>
                           <span>·</span><span>Modes: webhook</span>
                         </div>
                       </div>
                     </div>
                     <div class="adapter-controls">
                       <button class="btn btn-secondary btn-sm"
-                        onclick="openAdapterConfig('paystack-webhook')">Configure</button>
+                        onclick="openAdapterConfig('webhook-adapter')">Configure</button>
                       <label class="toggle"><input type="checkbox" checked><span class="toggle-track"></span><span
                           class="toggle-thumb"></span></label>
                     </div>
                   </div>
-                </div>
-
-                <div class="adapter-card">
-                  <div class="adapter-card-top">
-                    <div class="adapter-meta">
-                      <div class="adapter-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                        </svg></div>
-                      <div>
-                        <div class="adapter-name">flutterwave-webhook</div>
-                        <div class="adapter-desc">Receives charge.completed and transfer events from Flutterwave ·
-                          Inbound · Webhook</div>
-                        <div class="adapter-sub">
-                          <span class="badge healthy"><span class="badge-dot"></span>Healthy</span>
-                          <span>·</span><span>112ms latency</span>
-                          <span>·</span><span>Last run: 5m ago</span>
-                          <span>·</span><span>v1.0.0</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="adapter-controls">
-                      <button class="btn btn-secondary btn-sm"
-                        onclick="openAdapterConfig('flutterwave-webhook')">Configure</button>
-                      <label class="toggle"><input type="checkbox" checked><span class="toggle-track"></span><span
-                          class="toggle-thumb"></span></label>
-                    </div>
-                  </div>
-                </div>
-
-                <div class="adapter-card" style="border-color:var(--color-error-ring)">
-                  <div class="adapter-card-top">
-                    <div class="adapter-meta">
-                      <div class="adapter-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M5 12.55a11 11 0 0 1 14.08 0" />
-                          <path d="M1.42 9a16 16 0 0 1 21.16 0" />
-                          <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
-                          <circle cx="12" cy="20" r="1" fill="currentColor" />
-                        </svg></div>
-                      <div>
-                        <div class="adapter-name">mpesa-poll</div>
-                        <div class="adapter-desc">Polls Safaricom Daraja API for M-Pesa transactions (Kenya) · Inbound ·
-                          Poll</div>
-                        <div class="adapter-sub">
-                          <span class="badge adapter-error"><span class="badge-dot"></span>Error</span>
-                          <span>·</span><span>Last attempted: 47m ago</span>
-                          <span>·</span><span>v1.0.0</span>
-                          <span>·</span><span>Modes: poll</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div class="adapter-controls">
-                      <button class="btn btn-secondary btn-sm"
-                        onclick="openAdapterConfig('mpesa-poll')">Configure</button>
-                      <label class="toggle"><input type="checkbox" checked><span class="toggle-track"></span><span
-                          class="toggle-thumb"></span></label>
-                    </div>
-                  </div>
-                  <div class="adapter-error-notice">SOURCE_UNREACHABLE — Safaricom Daraja API returned 503. Next retry
-                    in 8 minutes.</div>
                 </div>
 
                 <div class="adapter-card">
@@ -950,16 +888,17 @@
                           stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                           <polyline points="14 2 14 8 20 8" />
-                          <line x1="16" y1="13" x2="8" y2="13" />
-                          <line x1="16" y1="17" x2="8" y2="17" />
+                          <line x1="8" y1="13" x2="16" y2="13" />
+                          <line x1="8" y1="17" x2="16" y2="17" />
                         </svg></div>
                       <div>
                         <div class="adapter-name">csv-import</div>
-                        <div class="adapter-desc">Accepts CSV/XLSX file uploads · Inbound · File import</div>
+                        <div class="adapter-desc">Imports CSV/XLSX transaction exports with configurable column mapping ·
+                          Inbound · File import</div>
                         <div class="adapter-sub">
                           <span class="badge healthy"><span class="badge-dot"></span>Healthy</span>
                           <span>·</span><span>Last used: 3h ago · 1,204 records</span>
-                          <span>·</span><span>v1.0.0</span>
+                          <span>·</span><span>v0.1.0</span>
                           <span>·</span><span>Modes: file-import</span>
                         </div>
                       </div>
@@ -972,11 +911,42 @@
                     </div>
                   </div>
                 </div>
+
+                <div class="adapter-card">
+                  <div class="adapter-card-top">
+                    <div class="adapter-meta">
+                      <div class="adapter-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+                          <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+                          <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+                          <circle cx="12" cy="20" r="1" fill="currentColor" />
+                        </svg></div>
+                      <div>
+                        <div class="adapter-name">poll-adapter</div>
+                        <div class="adapter-desc">Fetches transactions from simple JSON APIs on a schedule · Inbound ·
+                          Poll</div>
+                        <div class="adapter-sub">
+                          <span class="badge healthy"><span class="badge-dot"></span>Healthy</span>
+                          <span>·</span><span>Last poll: 15m ago · 384 records</span>
+                          <span>·</span><span>v0.1.0</span>
+                          <span>·</span><span>Modes: poll</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="adapter-controls">
+                      <button class="btn btn-secondary btn-sm"
+                        onclick="openAdapterConfig('poll-adapter')">Configure</button>
+                      <label class="toggle"><input type="checkbox" checked><span class="toggle-track"></span><span
+                          class="toggle-thumb"></span></label>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div class="section-group-label">Outbound</div>
-              <p class="outbound-desc">Outbound adapters receive batched journal entries from the engine and post them
-                to your accounting system. Configure credentials and posting behaviour below.</p>
+              <p class="outbound-desc">Outbound adapters receive batched journal entries from the engine and post or export
+                them for your accounting system. Configure credentials and posting behaviour below.</p>
               <div class="adapter-list">
                 <div class="adapter-card">
                   <div class="adapter-card-top">
@@ -996,13 +966,45 @@
                           <span class="badge healthy"><span class="badge-dot"></span>Healthy</span>
                           <span>·</span><span>203ms latency</span>
                           <span>·</span><span>Last run: 2m ago · 2,847 entries posted</span>
-                          <span>·</span><span>v1.0.0</span>
+                          <span>·</span><span>v0.1.0</span>
+                          <span>·</span><span>Modes: api</span>
                         </div>
                       </div>
                     </div>
                     <div class="adapter-controls">
                       <button class="btn btn-secondary btn-sm"
                         onclick="openAdapterConfig('zoho-books')">Configure</button>
+                      <label class="toggle"><input type="checkbox" checked><span class="toggle-track"></span><span
+                          class="toggle-thumb"></span></label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="adapter-card">
+                  <div class="adapter-card-top">
+                    <div class="adapter-meta">
+                      <div class="adapter-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <polyline points="14 2 14 8 20 8" />
+                          <line x1="8" y1="13" x2="16" y2="13" />
+                          <line x1="8" y1="17" x2="16" y2="17" />
+                        </svg></div>
+                      <div>
+                        <div class="adapter-name">journal-csv</div>
+                        <div class="adapter-desc">Exports generated journal batches as CSV for any accounting system ·
+                          Outbound</div>
+                        <div class="adapter-sub">
+                          <span class="badge healthy"><span class="badge-dot"></span>Healthy</span>
+                          <span>·</span><span>Last export: 1h ago · 516 entries</span>
+                          <span>·</span><span>v0.1.0</span>
+                          <span>·</span><span>Modes: file-export</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="adapter-controls">
+                      <button class="btn btn-secondary btn-sm"
+                        onclick="openAdapterConfig('journal-csv')">Configure</button>
                       <label class="toggle"><input type="checkbox" checked><span class="toggle-track"></span><span
                           class="toggle-thumb"></span></label>
                     </div>
@@ -1316,7 +1318,7 @@
             </div>
 
             <!-- SCHEMA & TYPES -->
-            <div class="settings-panel" id="settings-schema">
+            <div class="settings-panel active" id="settings-schema">
               <h2>Schema &amp; Types</h2>
               <p class="panel-desc">Operator-facing reference for the canonical transaction record. These fields are
                 produced by inbound adapters and consumed by the journal engine.</p>
@@ -1398,14 +1400,14 @@
                       <td>Original provider reference, when available.</td>
                       <td><span class="badge auditor-role">No</span></td>
                       <td>Deduplication and audit trail</td>
-                      <td class="mono">PSK_839104</td>
+                      <td class="mono">SRC_839104</td>
                     </tr>
                     <tr>
                       <td class="mono">source</td>
                       <td>Adapter, source system, and live/test environment.</td>
                       <td><span class="badge healthy">Yes</span></td>
                       <td>Traceability and test blocking</td>
-                      <td class="mono">paystack / live</td>
+                      <td class="mono">generic-api / live</td>
                     </tr>
                     <tr>
                       <td class="mono">status</td>
@@ -1480,13 +1482,13 @@
                   <div class="schema-mode-title">Webhook</div>
                   <p>Source system pushes each event to Ledgerise. Best for payment processors that support reliable
                     event callbacks.</p>
-                  <span class="type-tag">paystack-webhook</span>
+                  <span class="type-tag">webhook-adapter</span>
                 </div>
                 <div class="schema-mode-card">
                   <div class="schema-mode-title">Poll</div>
                   <p>Ledgerise calls the source API on a schedule using a cursor such as last fetched time or source ID.
                     Best when the provider does not push events.</p>
-                  <span class="type-tag">mpesa-poll</span>
+                  <span class="type-tag">poll-adapter</span>
                 </div>
                 <div class="schema-mode-card">
                   <div class="schema-mode-title">File Import</div>
@@ -2083,15 +2085,15 @@
 
     /* ── TX DRAWER ── */
     const txData = {
-      'TXN-00419': { sourceId: 'TXN-20260531-00419', adapter: 'paystack-webhook', env: 'live', occurred: '31 May · 14:01:54 UTC', settled: '31 May · 14:01:59 UTC', processed: '31 May · 14:02:01 UTC', status: 'settled', type: 'payment.electricity', dir: 'debit', amount: '₦5,000.00', platformFee: '₦100.00', processingFee: '₦70.00', netFee: '₦30.00', productLine: 'consumer-app', biller: 'ikeja-electric', category: 'electricity', channel: 'mobile', principalId: 'usr_0000291', principalRef: '080****4421', aggregator: 'buypower', accountRef: 'AV-BP-001', balBefore: '₦120,000.00', balAfter: '₦115,000.00', jnlId: 'JNL-20260531-0001', jnlKey: 'JNL-0001', jnlStatus: 'posted' },
-      'TXN-00420': { sourceId: 'TXN-20260531-00420', adapter: 'paystack-webhook', env: 'live', occurred: '31 May · 13:55:12 UTC', settled: '31 May · 13:55:17 UTC', processed: '31 May · 13:55:19 UTC', status: 'settled', type: 'payment.airtime', dir: 'debit', amount: '₦200.00', platformFee: '₦5.00', processingFee: '₦3.00', netFee: '₦2.00', productLine: 'consumer-app', biller: 'mtn', category: 'airtime', channel: 'ussd', principalId: 'usr_0000512', principalRef: '081****3310', aggregator: 'buypower', accountRef: 'AV-BP-001', balBefore: '₦85,000.00', balAfter: '₦84,800.00', jnlId: 'JNL-20260531-0002', jnlKey: 'JNL-0002', jnlStatus: 'posted' },
-      'TXN-00421': { sourceId: 'TXN-20260531-00421', adapter: 'paystack-webhook', env: 'live', occurred: '31 May · 13:16:12 UTC', settled: '31 May · 13:16:20 UTC', processed: '31 May · 13:16:22 UTC', status: 'settled', type: 'transfer.wallet-to-bank', dir: 'debit', amount: '₦15,000.00', platformFee: '₦50.00', processingFee: '₦0.00', netFee: '₦50.00', productLine: 'consumer-app', biller: null, category: null, channel: 'api', principalId: 'usr_0001044', principalRef: '***0891', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: 'JNL-20260531-0003', jnlKey: 'JNL-0003', jnlStatus: 'failed' },
-      'TXN-00423': { sourceId: 'TXN-20260531-00423', adapter: 'flutterwave-webhook', env: 'live', occurred: '31 May · 14:00:33 UTC', settled: '31 May · 14:00:38 UTC', processed: '31 May · 14:00:41 UTC', status: 'settled', type: 'collection.pos', dir: 'credit', amount: '₦8,500.00', platformFee: '₦85.00', processingFee: '₦0.00', netFee: '₦85.00', productLine: 'pos-network', biller: null, category: null, channel: 'pos', principalId: 'mch_0000887', principalRef: '***7742', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: 'JNL-20260531-0005', jnlKey: 'JNL-0005', jnlStatus: 'unmapped' },
-      'TXN-00424': { sourceId: 'TXN-20260531-00424', adapter: 'paystack-webhook', env: 'live', occurred: '31 May · 13:44:51 UTC', settled: '31 May · 13:44:56 UTC', processed: '31 May · 13:44:58 UTC', status: 'settled', type: 'payment.cable-tv', dir: 'debit', amount: '₦4,200.00', platformFee: '₦100.00', processingFee: '₦60.00', netFee: '₦40.00', productLine: 'consumer-app', biller: 'dstv', category: 'cable-tv', channel: 'mobile', principalId: 'usr_0000778', principalRef: '080****1122', aggregator: 'buypower', accountRef: 'AV-BP-001', balBefore: '₦200,000.00', balAfter: '₦195,800.00', jnlId: 'JNL-20260531-0004', jnlKey: 'JNL-0004', jnlStatus: 'posted' },
+      'TXN-00419': { sourceId: 'TXN-20260531-00419', adapter: 'webhook-adapter', env: 'live', occurred: '31 May · 14:01:54 UTC', settled: '31 May · 14:01:59 UTC', processed: '31 May · 14:02:01 UTC', status: 'settled', type: 'payment.electricity', dir: 'debit', amount: '₦5,000.00', platformFee: '₦100.00', processingFee: '₦70.00', netFee: '₦30.00', productLine: 'consumer-app', biller: 'ikeja-electric', category: 'electricity', channel: 'mobile', principalId: 'usr_0000291', principalRef: '080****4421', aggregator: 'buypower', accountRef: 'AV-BP-001', balBefore: '₦120,000.00', balAfter: '₦115,000.00', jnlId: 'JNL-20260531-0001', jnlKey: 'JNL-0001', jnlStatus: 'posted' },
+      'TXN-00420': { sourceId: 'TXN-20260531-00420', adapter: 'webhook-adapter', env: 'live', occurred: '31 May · 13:55:12 UTC', settled: '31 May · 13:55:17 UTC', processed: '31 May · 13:55:19 UTC', status: 'settled', type: 'payment.airtime', dir: 'debit', amount: '₦200.00', platformFee: '₦5.00', processingFee: '₦3.00', netFee: '₦2.00', productLine: 'consumer-app', biller: 'mtn', category: 'airtime', channel: 'ussd', principalId: 'usr_0000512', principalRef: '081****3310', aggregator: 'buypower', accountRef: 'AV-BP-001', balBefore: '₦85,000.00', balAfter: '₦84,800.00', jnlId: 'JNL-20260531-0002', jnlKey: 'JNL-0002', jnlStatus: 'posted' },
+      'TXN-00421': { sourceId: 'TXN-20260531-00421', adapter: 'webhook-adapter', env: 'live', occurred: '31 May · 13:16:12 UTC', settled: '31 May · 13:16:20 UTC', processed: '31 May · 13:16:22 UTC', status: 'settled', type: 'transfer.wallet-to-bank', dir: 'debit', amount: '₦15,000.00', platformFee: '₦50.00', processingFee: '₦0.00', netFee: '₦50.00', productLine: 'consumer-app', biller: null, category: null, channel: 'api', principalId: 'usr_0001044', principalRef: '***0891', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: 'JNL-20260531-0003', jnlKey: 'JNL-0003', jnlStatus: 'failed' },
+      'TXN-00423': { sourceId: 'TXN-20260531-00423', adapter: 'webhook-adapter', env: 'live', occurred: '31 May · 14:00:33 UTC', settled: '31 May · 14:00:38 UTC', processed: '31 May · 14:00:41 UTC', status: 'settled', type: 'collection.pos', dir: 'credit', amount: '₦8,500.00', platformFee: '₦85.00', processingFee: '₦0.00', netFee: '₦85.00', productLine: 'pos-network', biller: null, category: null, channel: 'pos', principalId: 'mch_0000887', principalRef: '***7742', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: 'JNL-20260531-0005', jnlKey: 'JNL-0005', jnlStatus: 'unmapped' },
+      'TXN-00424': { sourceId: 'TXN-20260531-00424', adapter: 'webhook-adapter', env: 'live', occurred: '31 May · 13:44:51 UTC', settled: '31 May · 13:44:56 UTC', processed: '31 May · 13:44:58 UTC', status: 'settled', type: 'payment.cable-tv', dir: 'debit', amount: '₦4,200.00', platformFee: '₦100.00', processingFee: '₦60.00', netFee: '₦40.00', productLine: 'consumer-app', biller: 'dstv', category: 'cable-tv', channel: 'mobile', principalId: 'usr_0000778', principalRef: '080****1122', aggregator: 'buypower', accountRef: 'AV-BP-001', balBefore: '₦200,000.00', balAfter: '₦195,800.00', jnlId: 'JNL-20260531-0004', jnlKey: 'JNL-0004', jnlStatus: 'posted' },
       'TXN-00426': { sourceId: 'TXN-20260531-00426', adapter: 'csv-import', env: 'live', occurred: '31 May · 11:02:44 UTC', settled: '31 May · 11:02:44 UTC', processed: '31 May · 11:30:01 UTC', status: 'settled', type: 'agency.cash-in', dir: 'credit', amount: '₦50,000.00', platformFee: '₦250.00', processingFee: '₦0.00', netFee: '₦250.00', productLine: 'agency-banking', biller: null, category: null, channel: 'agent', principalId: 'agt_0000099', principalRef: '***2290', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: 'JNL-20260531-0008', jnlKey: 'JNL-0008', jnlStatus: 'unmapped' },
-      'TXN-00430': { sourceId: 'TXN-20260531-00430', adapter: 'paystack-webhook', env: 'live', occurred: '31 May · 14:05:09 UTC', settled: null, processed: '31 May · 14:05:11 UTC', status: 'pending', type: 'payment.water', dir: 'debit', amount: '₦2,500.00', platformFee: '₦50.00', processingFee: '₦0.00', netFee: '₦50.00', productLine: 'consumer-app', biller: 'lawma', category: 'water', channel: 'web', principalId: 'usr_0000390', principalRef: '080****8810', aggregator: 'buypower', accountRef: 'AV-BP-001', balBefore: '₦35,000.00', balAfter: null, jnlId: null, jnlKey: null, jnlStatus: null },
-      'TXN-00431': { sourceId: 'TXN-20260531-00431', adapter: 'paystack-webhook', env: 'live', occurred: '31 May · 11:13:22 UTC', settled: '31 May · 11:13:28 UTC', processed: '31 May · 11:13:30 UTC', status: 'reversed', type: 'transfer.wallet-to-bank', dir: 'debit', amount: '₦75,000.00', platformFee: '₦50.00', processingFee: '₦0.00', netFee: '₦50.00', productLine: 'api-gateway', biller: null, category: null, channel: 'api', principalId: 'usr_0000102', principalRef: '***9201', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: 'JNL-20260531-0009', jnlKey: 'JNL-0009', jnlStatus: 'posted', isReversal: true },
-      'TXN-00401': { sourceId: 'TEST-20260531-00401', adapter: 'paystack-webhook', env: 'test', occurred: '31 May · 14:01:00 UTC', settled: '31 May · 14:01:02 UTC', processed: '31 May · 14:01:04 UTC', status: 'settled', type: 'payment.electricity', dir: 'debit', amount: '₦100.00', platformFee: '₦0.00', processingFee: '₦0.00', netFee: '₦0.00', productLine: 'consumer-app', biller: 'ikeja-electric', category: 'electricity', channel: 'api', principalId: 'test_usr_001', principalRef: '***0000', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: null, jnlKey: null, jnlStatus: null },
+      'TXN-00430': { sourceId: 'TXN-20260531-00430', adapter: 'webhook-adapter', env: 'live', occurred: '31 May · 14:05:09 UTC', settled: null, processed: '31 May · 14:05:11 UTC', status: 'pending', type: 'payment.water', dir: 'debit', amount: '₦2,500.00', platformFee: '₦50.00', processingFee: '₦0.00', netFee: '₦50.00', productLine: 'consumer-app', biller: 'lawma', category: 'water', channel: 'web', principalId: 'usr_0000390', principalRef: '080****8810', aggregator: 'buypower', accountRef: 'AV-BP-001', balBefore: '₦35,000.00', balAfter: null, jnlId: null, jnlKey: null, jnlStatus: null },
+      'TXN-00431': { sourceId: 'TXN-20260531-00431', adapter: 'webhook-adapter', env: 'live', occurred: '31 May · 11:13:22 UTC', settled: '31 May · 11:13:28 UTC', processed: '31 May · 11:13:30 UTC', status: 'reversed', type: 'transfer.wallet-to-bank', dir: 'debit', amount: '₦75,000.00', platformFee: '₦50.00', processingFee: '₦0.00', netFee: '₦50.00', productLine: 'api-gateway', biller: null, category: null, channel: 'api', principalId: 'usr_0000102', principalRef: '***9201', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: 'JNL-20260531-0009', jnlKey: 'JNL-0009', jnlStatus: 'posted', isReversal: true },
+      'TXN-00401': { sourceId: 'TEST-20260531-00401', adapter: 'webhook-adapter', env: 'test', occurred: '31 May · 14:01:00 UTC', settled: '31 May · 14:01:02 UTC', processed: '31 May · 14:01:04 UTC', status: 'settled', type: 'payment.electricity', dir: 'debit', amount: '₦100.00', platformFee: '₦0.00', processingFee: '₦0.00', netFee: '₦0.00', productLine: 'consumer-app', biller: 'ikeja-electric', category: 'electricity', channel: 'api', principalId: 'test_usr_001', principalRef: '***0000', aggregator: null, accountRef: null, balBefore: null, balAfter: null, jnlId: null, jnlKey: null, jnlStatus: null },
     };
 
     function openTxDrawer(txId) {
@@ -2178,7 +2180,7 @@
           { ok: true, event: 'Posted to accounting system', time: '31 May 2026, 14:03:12 UTC' },
           { ok: true, event: 'Journal entry generated', time: '31 May 2026, 14:03:08 UTC' },
           { ok: true, event: 'Mapping rule resolved — R001', time: '31 May 2026, 14:03:07 UTC' },
-          { ok: true, event: 'Transaction ingested via paystack-webhook', time: '31 May 2026, 14:01:54 UTC' },
+          { ok: true, event: 'Transaction ingested via webhook-adapter', time: '31 May 2026, 14:01:54 UTC' },
         ],
       },
       'JNL-0003': {
@@ -2196,7 +2198,7 @@
           { ok: false, event: 'Retry 2 failed — accounting system API returned 503', time: '31 May 2026, 13:33:00 UTC' },
           { ok: false, event: 'Initial post failed — accounting system API returned 503', time: '31 May 2026, 13:18:00 UTC' },
           { ok: true, event: 'Journal entry generated', time: '31 May 2026, 13:17:55 UTC' },
-          { ok: true, event: 'Transaction ingested via paystack-webhook', time: '31 May 2026, 13:16:12 UTC' },
+          { ok: true, event: 'Transaction ingested via webhook-adapter', time: '31 May 2026, 13:16:12 UTC' },
         ],
       },
       'JNL-0005': {
@@ -2207,7 +2209,7 @@
         lines: [{ type: 'dr', code: 'X9999', name: 'Suspense', amt: '₦8,500.00' }],
         timeline: [
           { ok: false, event: 'No matching rule — parked in suspense account (X9999)', time: '31 May 2026, 14:03:07 UTC' },
-          { ok: true, event: 'Transaction ingested via flutterwave-webhook', time: '31 May 2026, 14:00:33 UTC' },
+          { ok: true, event: 'Transaction ingested via webhook-adapter', time: '31 May 2026, 14:00:33 UTC' },
         ],
       },
       'JNL-0002': {
@@ -2224,7 +2226,7 @@
           { ok: true, event: 'Posted to accounting system', time: '31 May 2026, 13:56:05 UTC' },
           { ok: true, event: 'Journal entry generated', time: '31 May 2026, 13:56:01 UTC' },
           { ok: true, event: 'Mapping rule resolved — R002', time: '31 May 2026, 13:56:00 UTC' },
-          { ok: true, event: 'Transaction ingested via paystack-webhook', time: '31 May 2026, 13:55:12 UTC' },
+          { ok: true, event: 'Transaction ingested via webhook-adapter', time: '31 May 2026, 13:55:12 UTC' },
         ],
       },
       'JNL-0004': {
@@ -2241,7 +2243,7 @@
           { ok: true, event: 'Posted to accounting system', time: '31 May 2026, 13:45:38 UTC' },
           { ok: true, event: 'Journal entry generated', time: '31 May 2026, 13:45:34 UTC' },
           { ok: true, event: 'Mapping rule resolved — R003', time: '31 May 2026, 13:45:33 UTC' },
-          { ok: true, event: 'Transaction ingested via paystack-webhook', time: '31 May 2026, 13:44:51 UTC' },
+          { ok: true, event: 'Transaction ingested via webhook-adapter', time: '31 May 2026, 13:44:51 UTC' },
         ],
       },
       'JNL-0006': {
@@ -2259,7 +2261,7 @@
           { ok: true, event: 'Posted to accounting system', time: '31 May 2026, 14:03:15 UTC' },
           { ok: true, event: 'Journal entry generated', time: '31 May 2026, 14:03:11 UTC' },
           { ok: true, event: 'Mapping rule resolved — R005 (catch-all)', time: '31 May 2026, 14:03:10 UTC' },
-          { ok: true, event: 'Transaction ingested via paystack-webhook', time: '31 May 2026, 14:02:44 UTC' },
+          { ok: true, event: 'Transaction ingested via webhook-adapter', time: '31 May 2026, 14:02:44 UTC' },
         ],
       },
       'JNL-0007': {
@@ -2305,7 +2307,7 @@
           { ok: true, event: 'Reversal posted to accounting system', time: '31 May 2026, 11:15:22 UTC' },
           { ok: true, event: 'Reversal journal entry generated (DR/CR swapped from original)', time: '31 May 2026, 11:15:18 UTC' },
           { ok: true, event: 'Original posting confirmed — reversal entry eligible', time: '31 May 2026, 11:15:17 UTC' },
-          { ok: true, event: 'Reversal transaction ingested via paystack-webhook', time: '31 May 2026, 11:14:50 UTC' },
+          { ok: true, event: 'Reversal transaction ingested via webhook-adapter', time: '31 May 2026, 11:14:50 UTC' },
         ],
       },
     };
@@ -2486,63 +2488,117 @@
     }
 
     /* ── ADAPTER CONFIGURE ── */
+    const canonicalFieldOptions = [
+      'source_id',
+      'source.system',
+      'source.environment',
+      'occurred_at',
+      'settled_at',
+      'status',
+      'type',
+      'direction',
+      'amount',
+      'currency',
+      'principal.id',
+      'principal.type',
+      'principal.reference',
+      'channel',
+      'product.line',
+      'product.biller',
+      'product.biller_category',
+      'fee.platform_fee',
+      'fee.processing_fee',
+      'fee.net_fee',
+      'float.aggregator',
+      'float.account_ref',
+      'metadata'
+    ];
+    const transformOptions = ['copy', 'default', 'enum_map', 'parse_datetime', 'amount_to_minor', 'amount_major', 'uppercase', 'mask_phone', 'mask_card'];
+
     const acDefs = {
-      'paystack-webhook': {
+      'webhook-adapter': {
         subtitle: 'Inbound · Webhook',
         sections: [
           {
             title: 'Webhook Endpoint', fields: [
-              { label: 'Inbound URL', type: 'display', value: 'https://api.ledgerise.dev/in/paystack-webhook', hint: 'Copy this URL into Paystack dashboard → Settings → API Keys → Webhook URL.' },
-              { label: 'Webhook Secret', type: 'password', hint: 'Used to verify HMAC-SHA512 signatures on incoming payloads. Required.' },
+              { label: 'Inbound URL', type: 'display', value: 'https://api.ledgerise.dev/in/webhook-adapter', hint: 'Send mapped JSON payloads from any source system to this endpoint.' },
+              { label: 'Signing Secret', type: 'password', hint: 'Optional shared secret for verifying incoming requests.' },
             ]
           },
           {
-            title: 'Accepted Events', fields: [
-              { label: 'Forward these event types', type: 'checkboxes', options: ['charge.success', 'transfer.success', 'transfer.failed', 'transfer.reversed'], checked: ['charge.success', 'transfer.success', 'transfer.reversed'], hint: 'Unrecognised events return 200 and are discarded.' },
+            title: 'Payload Contract', fields: [
+              { label: 'Records Path', type: 'text', value: 'records', hint: 'JSON path containing one or more canonical transaction records.' },
+              { label: 'Accept Partial Batches', type: 'select', options: ['Yes, store valid records', 'No, reject entire batch'], value: 'Yes, store valid records', hint: 'Controls how the adapter handles mixed valid/invalid payloads.' },
+            ]
+          },
+          {
+            title: 'Field Mapping',
+            desc: 'Map source JSON paths to Ledgerise canonical fields before records reach the journal engine.',
+            fields: [
+              {
+                type: 'mapping',
+                id: 'webhook-map',
+                rows: [
+                  { sourcePath: 'txn_ref', canonicalField: 'source_id', transform: 'copy', defaultValue: '', required: true },
+                  { sourcePath: 'paid_at', canonicalField: 'occurred_at', transform: 'parse_datetime', defaultValue: '', required: true },
+                  { sourcePath: 'state', canonicalField: 'status', transform: 'enum_map', defaultValue: 'SUCCESS=settled, FAILED=failed', required: true },
+                  { sourcePath: 'value', canonicalField: 'amount', transform: 'amount_to_minor', defaultValue: '', required: true },
+                  { sourcePath: 'service', canonicalField: 'type', transform: 'enum_map', defaultValue: 'electricity=payment.electricity', required: true },
+                  { sourcePath: 'customer_phone', canonicalField: 'principal.reference', transform: 'mask_phone', defaultValue: '', required: false },
+                ],
+                preview: {
+                  source: '{\n  "txn_ref": "ABC123",\n  "paid_at": "2026-05-31T14:01:54Z",\n  "state": "SUCCESS",\n  "value": 5000,\n  "service": "electricity",\n  "customer_phone": "08012345678"\n}',
+                  output: '{\n  "source_id": "ABC123",\n  "status": "settled",\n  "amount": 500000,\n  "currency": "NGN"\n}'
+                }
+              }
             ]
           },
           {
             title: 'Normalization Defaults', fields: [
-              { label: 'Default Product Line', type: 'text', value: 'consumer-app', hint: 'Applied when the event payload does not include a product line.' },
+              { label: 'Default Source System', type: 'text', value: 'generic-api', hint: 'Applied when source.system is missing.' },
+              { label: 'Default Environment', type: 'select', options: ['live', 'test'], value: 'live', hint: 'Test records are stored but blocked from posting.' },
+              { label: 'Default Currency', type: 'text', value: 'NGN', hint: 'Used when the source payload does not include currency.' },
             ]
           },
         ],
       },
-      'flutterwave-webhook': {
-        subtitle: 'Inbound · Webhook',
-        sections: [
-          {
-            title: 'Webhook Endpoint', fields: [
-              { label: 'Inbound URL', type: 'display', value: 'https://api.ledgerise.dev/in/flutterwave-webhook', hint: 'Set this URL in Flutterwave dashboard → Settings → Webhooks.' },
-              { label: 'Secret Hash', type: 'password', hint: 'Flutterwave sends this as the verif-hash header. Required for payload verification.' },
-            ]
-          },
-          {
-            title: 'Accepted Events', fields: [
-              { label: 'Forward these event types', type: 'checkboxes', options: ['charge.completed', 'transfer.completed', 'transfer.failed'], checked: ['charge.completed', 'transfer.completed'], hint: 'Only selected event types will be normalized and stored.' },
-            ]
-          },
-          {
-            title: 'Normalization Defaults', fields: [
-              { label: 'Default Product Line', type: 'text', value: 'consumer-app', hint: '' },
-            ]
-          },
-        ],
-      },
-      'mpesa-poll': {
+      'poll-adapter': {
         subtitle: 'Inbound · Poll',
         sections: [
           {
-            title: 'Daraja API Credentials', fields: [
-              { label: 'Consumer Key', type: 'password', hint: 'From your app on developer.safaricom.co.ke.' },
-              { label: 'Consumer Secret', type: 'password', hint: 'From your app on developer.safaricom.co.ke.' },
-              { label: 'Business Shortcode', type: 'text', value: '', hint: 'Your M-Pesa paybill or till number.' },
-              { label: 'Environment', type: 'select', options: ['Production', 'Sandbox'], value: 'Production', hint: 'Use Sandbox for testing. Never mix with live credentials.' },
+            title: 'Source API', fields: [
+              { label: 'Endpoint URL', type: 'text', value: 'https://api.example.com/transactions', hint: 'Ledgerise fetches this URL on the configured schedule.' },
+              { label: 'Auth Header', type: 'text', value: 'Authorization', hint: 'Header used for API authentication.' },
+              { label: 'API Token', type: 'password', hint: 'Stored securely and redacted from logs.' },
+              { label: 'Records Path', type: 'text', value: 'data.transactions', hint: 'JSON path containing source records.' },
             ]
           },
           {
             title: 'Poll Schedule', fields: [
-              { label: 'Poll Interval', type: 'select', options: ['Every 5 minutes', 'Every 15 minutes', 'Every 30 minutes', 'Every hour'], value: 'Every 15 minutes', hint: 'How often Ledgerise queries the Daraja API for new transactions.' },
+              { label: 'Poll Interval', type: 'select', options: ['Every 5 minutes', 'Every 15 minutes', 'Every 30 minutes', 'Every hour'], value: 'Every 15 minutes', hint: 'How often Ledgerise fetches new records.' },
+              { label: 'Cursor Field', type: 'text', value: 'updated_at', hint: 'Field used to advance the next poll cursor after successful ingestion.' },
+            ]
+          },
+          {
+            title: 'Field Mapping',
+            desc: 'Map each API result object to canonical fields. The cursor only advances after these records validate.',
+            fields: [
+              {
+                type: 'mapping',
+                id: 'poll-map',
+                rows: [
+                  { sourcePath: 'id', canonicalField: 'source_id', transform: 'copy', defaultValue: '', required: true },
+                  { sourcePath: 'created_at', canonicalField: 'occurred_at', transform: 'parse_datetime', defaultValue: '', required: true },
+                  { sourcePath: 'settled_at', canonicalField: 'settled_at', transform: 'parse_datetime', defaultValue: '', required: false },
+                  { sourcePath: 'amount', canonicalField: 'amount', transform: 'amount_to_minor', defaultValue: '', required: true },
+                  { sourcePath: 'status', canonicalField: 'status', transform: 'enum_map', defaultValue: 'completed=settled, failed=failed', required: true },
+                  { sourcePath: 'product', canonicalField: 'product.line', transform: 'copy', defaultValue: 'consumer-app', required: true },
+                ],
+                preview: {
+                  source: '{\n  "id": "api_8841",\n  "created_at": "2026-05-31T11:02:44Z",\n  "status": "completed",\n  "amount": 1200,\n  "product": "consumer-app"\n}',
+                  output: '{\n  "source_id": "api_8841",\n  "status": "settled",\n  "amount": 120000,\n  "product": { "line": "consumer-app" }\n}'
+                }
+              }
             ]
           },
         ],
@@ -2551,14 +2607,27 @@
         subtitle: 'Inbound · File import',
         sections: [
           {
-            title: 'Column Mapping', desc: 'Map your CSV column headers to Ledgerise canonical fields.', fields: [
-              { label: 'Transaction ID column', type: 'text', value: 'reference', hint: 'Maps to source_id for deduplication.' },
-              { label: 'Date column', type: 'text', value: 'transaction_date', hint: 'Maps to occurred_at.' },
-              { label: 'Amount column', type: 'text', value: 'amount', hint: 'Maps to amount.' },
-              { label: 'Status column', type: 'text', value: 'status', hint: 'Values must be: settled, pending, failed, reversed, disputed.' },
-              { label: 'Type column', type: 'text', value: 'transaction_type', hint: 'Must follow dot notation, e.g. payment.electricity.' },
-              { label: 'Product Line column', type: 'text', value: 'product_line', hint: 'Maps to product.line. Required.' },
-              { label: 'Biller column (optional)', type: 'text', value: 'biller', hint: 'Maps to product.biller. Leave blank if not in CSV.' },
+            title: 'Column Mapping',
+            desc: 'Map CSV headers to canonical fields. These mappings are stored as configuration, not code.',
+            fields: [
+              {
+                type: 'mapping',
+                id: 'csv-map',
+                sourceLabel: 'CSV column',
+                rows: [
+                  { sourcePath: 'reference', canonicalField: 'source_id', transform: 'copy', defaultValue: '', required: true },
+                  { sourcePath: 'transaction_date', canonicalField: 'occurred_at', transform: 'parse_datetime', defaultValue: '', required: true },
+                  { sourcePath: 'amount', canonicalField: 'amount', transform: 'amount_to_minor', defaultValue: '', required: true },
+                  { sourcePath: 'status', canonicalField: 'status', transform: 'enum_map', defaultValue: 'success=settled, failed=failed', required: true },
+                  { sourcePath: 'transaction_type', canonicalField: 'type', transform: 'copy', defaultValue: '', required: true },
+                  { sourcePath: 'product_line', canonicalField: 'product.line', transform: 'copy', defaultValue: '', required: true },
+                  { sourcePath: 'biller', canonicalField: 'product.biller', transform: 'copy', defaultValue: '', required: false },
+                ],
+                preview: {
+                  source: 'reference,transaction_date,amount,status,transaction_type,product_line,biller\nCSV-4482,2026-05-31,5000,success,payment.electricity,consumer-app,ikeja-electric',
+                  output: '{\n  "source_id": "CSV-4482",\n  "occurred_at": "2026-05-31T00:00:00Z",\n  "amount": 500000,\n  "status": "settled"\n}'
+                }
+              }
             ]
           },
           {
@@ -2594,7 +2663,109 @@
           },
         ],
       },
+      'journal-csv': {
+        subtitle: 'Outbound · File export',
+        sections: [
+          {
+            title: 'Export Format', fields: [
+              { label: 'File Name Pattern', type: 'text', value: 'ledgerise-journals-{date}.csv', hint: 'Used when exporting generated journal batches.' },
+              { label: 'Date Format', type: 'select', options: ['YYYY-MM-DD', 'DD/MM/YYYY', 'MM/DD/YYYY', 'ISO 8601'], value: 'YYYY-MM-DD', hint: '' },
+              { label: 'Amount Unit', type: 'select', options: ['Smallest unit (kobo, cents)', 'Major unit (naira, dollars)'], value: 'Major unit (naira, dollars)', hint: 'Controls exported CSV display only; Ledgerise stores smallest-unit amounts internally.' },
+            ]
+          },
+          {
+            title: 'Columns', fields: [
+              { label: 'Include Source Transaction ID', type: 'select', options: ['Yes', 'No'], value: 'Yes', hint: 'Useful for audit traceability during manual import.' },
+              { label: 'Include Mapping Rule ID', type: 'select', options: ['Yes', 'No'], value: 'Yes', hint: 'Shows which rule produced each journal entry.' },
+            ]
+          },
+        ],
+      },
     };
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function renderOptions(options, selected) {
+      return options.map(o => `<option${o === selected ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('');
+    }
+
+    function renderMappingProfile(field) {
+      const sourceLabel = field.sourceLabel || 'Source path';
+      const rows = field.rows.map(row => renderMappingRow(row)).join('');
+      return `
+        <div class="field-map-sample">
+          <div class="field-map-sample-top">
+            <div>
+              <div class="field-map-sample-title">Sample ${field.sourceLabel ? 'file row' : 'payload'}</div>
+              <div class="field-map-status" id="${field.id}-status">Paste a sample, then detect suggested mappings.</div>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="detectMapping('${field.id}', ${field.rows.length})">Detect fields</button>
+          </div>
+          <textarea spellcheck="false">${escapeHtml(field.preview.source)}</textarea>
+        </div>
+        <div class="field-map" data-map-id="${field.id}">
+          <div class="field-map-head">
+            <span>${sourceLabel}</span>
+            <span>Canonical field</span>
+            <span>Normalize as</span>
+            <span>Default / map</span>
+            <span>Required</span>
+            <span></span>
+          </div>
+          <div class="field-map-body">${rows}</div>
+        </div>
+        <div class="field-map-toolbar">
+          <button class="btn btn-secondary btn-sm" onclick="addMappingRow('${field.id}')">Add field</button>
+          <button class="btn btn-ghost btn-sm" onclick="previewMapping('${field.id}')">Preview mapping</button>
+        </div>
+        <div class="field-map-note">Normalize as controls how Ledgerise cleans or converts the source value before validation.</div>
+        <div class="field-map-preview" id="${field.id}-preview" style="display:none">
+          <div class="field-map-preview-title">Preview output</div>
+          <pre>${escapeHtml(field.preview.output)}</pre>
+        </div>`;
+    }
+
+    function renderMappingRow(row = {}) {
+      return `
+        <div class="field-map-row">
+          <input type="text" value="${escapeHtml(row.sourcePath || '')}" placeholder="data.reference">
+          <select>${renderOptions(canonicalFieldOptions, row.canonicalField || 'source_id')}</select>
+          <select>${renderOptions(transformOptions, row.transform || 'copy')}</select>
+          <input type="text" value="${escapeHtml(row.defaultValue || '')}" placeholder="optional">
+          <label class="field-map-required"><input type="checkbox"${row.required ? ' checked' : ''}></label>
+          <div class="field-map-actions"><button class="btn btn-ghost btn-sm" aria-label="Remove mapping row" onclick="this.closest('.field-map-row').remove()">×</button></div>
+        </div>`;
+    }
+
+    function detectMapping(mapId, count) {
+      const status = document.getElementById(mapId + '-status');
+      if (status) {
+        status.textContent = `${count} suggested mappings detected. Review transforms and required fields before saving.`;
+        status.classList.add('ok');
+      }
+      showToast('Suggested mappings detected');
+    }
+
+    function addMappingRow(mapId) {
+      const body = document.querySelector(`[data-map-id="${mapId}"] .field-map-body`);
+      if (!body) return;
+      body.insertAdjacentHTML('beforeend', renderMappingRow({ canonicalField: 'metadata', transform: 'copy' }));
+      showToast('Mapping row added');
+    }
+
+    function previewMapping(mapId) {
+      const preview = document.getElementById(mapId + '-preview');
+      if (!preview) return;
+      preview.style.display = 'block';
+      showToast('Sample payload normalized');
+    }
 
     function openAdapterConfig(id) {
       const def = acDefs[id];
@@ -2622,6 +2793,8 @@
             html += `<div class="form-field"><label>${f.label}</label><div class="checkbox-group">${boxes}</div><div class="hint">${f.hint}</div></div>`;
           } else if (f.type === 'action') {
             html += `<div class="form-field"><div class="connect-field"><button class="btn btn-secondary btn-sm" onclick="showToast('Connection successful')">${f.text}</button><span class="connect-status ${f.statusClass}">${f.status}</span></div></div>`;
+          } else if (f.type === 'mapping') {
+            html += renderMappingProfile(f);
           }
         });
         html += '</div>';
