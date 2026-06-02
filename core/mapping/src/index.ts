@@ -9,6 +9,8 @@ export interface ChartAccount {
   code: string;
   name: string;
   type: AccountType;
+  subCategory?: string;
+  currency: string;
   parentCode?: string;
   active: boolean;
   createdAt: string;
@@ -39,6 +41,8 @@ export interface NewChartAccount {
   code: string;
   name: string;
   type: AccountType;
+  subCategory?: string;
+  currency?: string;
   parentCode?: string;
   active?: boolean;
 }
@@ -151,6 +155,8 @@ export class InMemoryMappingRepository implements MappingRepository {
       if (existing) {
         existing.name = account.name;
         existing.type = account.type;
+        existing.subCategory = account.subCategory ?? existing.subCategory;
+        existing.currency = account.currency ?? existing.currency;
         existing.parentCode = account.parentCode;
         existing.active = account.active ?? true;
         existing.updatedAt = now;
@@ -163,6 +169,8 @@ export class InMemoryMappingRepository implements MappingRepository {
         code: account.code,
         name: account.name,
         type: account.type,
+        subCategory: account.subCategory,
+        currency: account.currency ?? 'NGN',
         parentCode: account.parentCode,
         active: account.active ?? true,
         createdAt: now,

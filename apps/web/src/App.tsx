@@ -11,6 +11,8 @@ interface ChartAccount {
   code: string;
   name: string;
   type: AccountType;
+  subCategory?: string;
+  currency: string;
   parentCode?: string;
   active: boolean;
 }
@@ -704,7 +706,7 @@ export function App() {
     }
   }
 
-  async function importCoaFromCsv(rows: { code: string; name: string; type: AccountType }[]) {
+  async function importCoaFromCsv(rows: CoaRow[]) {
     const result = await apiPost<{ records: ChartAccount[] }>('/api/coa/import', { accounts: rows });
     setAccounts((prev) => {
       const byCode = new Map(prev.map((a) => [a.code, a]));
@@ -2119,7 +2121,7 @@ function SettingsView(props: {
   accounts: ChartAccount[];
   adapters: AdapterRecord[];
   pollStatuses: Record<string, PollStatusRecord>;
-  importCoaFromCsv: (rows: { code: string; name: string; type: AccountType }[]) => Promise<void>;
+  importCoaFromCsv: (rows: CoaRow[]) => Promise<void>;
   createApiKey: (input: { name: string; scopes: ApiScope[] }) => Promise<void>;
   inviteUser: (input: { email: string; displayName?: string; role: UserRole; password?: string }) => Promise<void>;
   newApiKeySecret: string;
@@ -2547,7 +2549,7 @@ function UsersSettingsPanel(props: {
   );
 }
 
-type CoaRow = { code: string; name: string; type: AccountType };
+type CoaRow = { code: string; name: string; type: AccountType; subCategory?: string; currency?: string };
 type CoaParseResult = CoaRow | { error: string; raw: string };
 
 function parseCsvLine(line: string): string[] {
@@ -2578,19 +2580,23 @@ function parseCoaCsv(text: string): CoaParseResult[] {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
   if (lines.length === 0) return [];
 
-  const firstFields = parseCsvLine(lines[0] ?? '').map((f) => f.toLowerCase());
+  const firstFields = parseCsvLine(lines[0] ?? '').map((f) => f.toLowerCase().trim());
   const hasHeader = firstFields.some((h) => h.includes('code') || h.includes('account') || h === 'type' || h === 'name' || h === 'class');
 
-  let codeIdx = 0, nameIdx = 1, typeIdx = 2;
+  let codeIdx = 0, nameIdx = 1, typeIdx = 2, subCatIdx = -1, currencyIdx = -1;
   const startIdx = hasHeader ? 1 : 0;
 
   if (hasHeader) {
     const ci = firstFields.findIndex((h) => h === 'account code' || h === 'code');
     const ni = firstFields.findIndex((h) => h === 'account name' || h === 'name');
     const ti = firstFields.findIndex((h) => h === 'class' || h === 'account type' || h === 'type');
+    const si = firstFields.findIndex((h) => h === 'sub-category' || h === 'sub_category' || h === 'subcategory' || h === 'sub category' || h === 'category');
+    const xi = firstFields.findIndex((h) => h === 'currency' || h === 'ccy');
     if (ci >= 0) codeIdx = ci;
     if (ni >= 0) nameIdx = ni;
     if (ti >= 0) typeIdx = ti;
+    subCatIdx = si;
+    currencyIdx = xi;
   }
 
   const results: CoaParseResult[] = [];
@@ -2602,7 +2608,9 @@ function parseCoaCsv(text: string): CoaParseResult[] {
     if (!code || !name || !/^\d/.test(code)) continue;
     const type = normalizeCoaType(rawType);
     if (!type) { results.push({ error: `Unknown type "${rawType}"`, raw: lines[i] ?? '' }); continue; }
-    results.push({ code, name, type });
+    const subCategory = subCatIdx >= 0 ? (fields[subCatIdx]?.trim() || undefined) : undefined;
+    const currency = currencyIdx >= 0 ? (fields[currencyIdx]?.trim() || undefined) : undefined;
+    results.push({ code, name, type, subCategory, currency });
   }
   return results;
 }
@@ -2617,12 +2625,12 @@ const COA_SECTION_LABELS: Record<AccountType, string> = {
 const COA_SECTION_ORDER: AccountType[] = ['asset', 'liability', 'equity', 'revenue', 'expense'];
 
 const COA_CSV_TEMPLATE = [
-  'Account Code,Account Name,Type',
-  '100030,BNK — Globus Bank (Collection),Asset',
-  '199999,Suspense / Clearing Account,Asset',
-  '200010,Payable — Biller Settlement Pool,Liability',
-  '410010,AirVend | MTN — Airtime & Data,Income',
-  '510210,COS | Aggregator Transaction Cost,Expense'
+  'Account Code,Account Name,Type,Sub-category,Currency',
+  '100030,BNK — Globus Bank (Collection),Asset,Cash & Bank,NGN',
+  '199999,Suspense / Clearing Account,Asset,Suspense,NGN',
+  '200010,Payable — Biller Settlement Pool,Liability,Trade Payables,NGN',
+  '410010,AirVend | MTN — Airtime & Data,Income,AirVend Revenue,NGN',
+  '510210,COS | Aggregator Transaction Cost,Expense,Aggregator Costs,NGN'
 ].join('\r\n');
 
 function downloadTemplate() {
@@ -2711,18 +2719,18 @@ function CsvCoaImportPanel(props: {
       <div className="table-card">
         <table className="tbl">
           <thead>
-            <tr><th>Code</th><th>Account Name</th><th>Type</th><th>Status</th></tr>
+            <tr><th>Code</th><th>Account Name</th><th>Sub-category</th><th>Type</th><th>CCY</th><th>Status</th></tr>
           </thead>
           <tbody>
             {accounts.length === 0 && (
-              <tr><td colSpan={4} className="dim">No accounts imported yet. Use Import CSV above to get started.</td></tr>
+              <tr><td colSpan={6} className="dim">No accounts imported yet. Use Import CSV above to get started.</td></tr>
             )}
             {COA_SECTION_ORDER.flatMap((type) => {
               const rows = grouped[type];
               if (!rows.length) return [];
               return [
                 <tr key={`hdr-${type}`}>
-                  <td colSpan={4} style={{ background: 'var(--color-muted-bg)', fontWeight: 600, fontSize: 11, color: 'var(--color-text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                  <td colSpan={6} style={{ background: 'var(--color-muted-bg)', fontWeight: 600, fontSize: 11, color: 'var(--color-text-2)', textTransform: 'uppercase', letterSpacing: '.04em' }}>
                     {COA_SECTION_LABELS[type]}
                   </td>
                 </tr>,
@@ -2730,7 +2738,9 @@ function CsvCoaImportPanel(props: {
                   <tr key={account.id}>
                     <td className="mono">{account.code}</td>
                     <td>{account.name}</td>
+                    <td className="dim">{account.subCategory ?? '—'}</td>
                     <td>{accountTypeChip(account.type)}</td>
+                    <td className="mono dim" style={{ fontSize: 'var(--text-xs)' }}>{account.currency}</td>
                     <td><span className={`badge ${account.active ? 'active-rule' : 'failed'}`}>{account.active ? 'Active' : 'Inactive'}</span></td>
                   </tr>
                 ))

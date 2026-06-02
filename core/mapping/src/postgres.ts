@@ -23,6 +23,8 @@ interface ChartAccountRow {
   code: string;
   name: string;
   type: ChartAccount['type'];
+  sub_category: string | null;
+  currency: string;
   parent_code: string | null;
   active: boolean;
   created_at: Date | string;
@@ -69,17 +71,23 @@ export class PostgresMappingRepository implements MappingRepository {
       for (const account of accounts) {
         const result = await client.query<ChartAccountRow>(
           `
-            INSERT INTO chart_of_accounts (operator_id, code, name, type, parent_code, active)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO chart_of_accounts (operator_id, code, name, type, sub_category, currency, parent_code, active)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (operator_id, code) DO UPDATE SET
-              name = EXCLUDED.name,
-              type = EXCLUDED.type,
+              name        = EXCLUDED.name,
+              type        = EXCLUDED.type,
+              sub_category = EXCLUDED.sub_category,
+              currency    = EXCLUDED.currency,
               parent_code = EXCLUDED.parent_code,
-              active = EXCLUDED.active,
-              updated_at = now()
-            RETURNING id, operator_id, code, name, type, parent_code, active, created_at, updated_at
+              active      = EXCLUDED.active,
+              updated_at  = now()
+            RETURNING id, operator_id, code, name, type, sub_category, currency, parent_code, active, created_at, updated_at
           `,
-          [operatorId, account.code, account.name, account.type, account.parentCode ?? null, account.active ?? true]
+          [
+            operatorId, account.code, account.name, account.type,
+            account.subCategory ?? null, account.currency ?? 'NGN',
+            account.parentCode ?? null, account.active ?? true
+          ]
         );
         if (result.rows[0]) imported.push(toChartAccount(result.rows[0]));
       }
@@ -96,7 +104,7 @@ export class PostgresMappingRepository implements MappingRepository {
   async listChartAccounts(operatorId: string): Promise<ChartAccount[]> {
     const result = await this.pool.query<ChartAccountRow>(
       `
-        SELECT id, operator_id, code, name, type, parent_code, active, created_at, updated_at
+        SELECT id, operator_id, code, name, type, sub_category, currency, parent_code, active, created_at, updated_at
         FROM chart_of_accounts
         WHERE operator_id = $1
         ORDER BY code ASC
@@ -342,6 +350,8 @@ function toChartAccount(row: ChartAccountRow): ChartAccount {
     code: row.code,
     name: row.name,
     type: row.type,
+    subCategory: row.sub_category ?? undefined,
+    currency: row.currency,
     parentCode: row.parent_code ?? undefined,
     active: row.active,
     createdAt: toIsoString(row.created_at),
