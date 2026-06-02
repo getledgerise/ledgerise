@@ -218,7 +218,6 @@ class InMemoryAccessStore implements AccessStore {
     if (!user) return null;
 
     const now = new Date().toISOString();
-    user.status = user.status === 'invited' ? 'active' : user.status;
     user.lastLoginAt = now;
     user.updatedAt = now;
     return user;
@@ -374,7 +373,6 @@ class PostgresAccessStore implements AccessStore {
       `
         UPDATE users
         SET
-          status = CASE WHEN status = 'invited' THEN 'active' ELSE status END,
           last_login_at = now(),
           updated_at = now()
         WHERE operator_id = $1 AND id = $2
@@ -578,6 +576,35 @@ interface ApiKeyManagementRow {
   updated_at: Date | string;
 }
 
+interface SystemSettings {
+  engineCronSchedule: string;
+  batchSize: number;
+  suspenseAccountCode: string;
+  maxRetryAttempts: number;
+  backoffStrategy: 'exponential' | 'fixed';
+}
+
+const defaultSystemSettings: SystemSettings = {
+  engineCronSchedule: '0 * * * *',
+  batchSize: 500,
+  suspenseAccountCode: 'X9999',
+  maxRetryAttempts: 5,
+  backoffStrategy: 'exponential'
+};
+
+const systemSettingsStore = new Map<string, SystemSettings>();
+
+function getSystemSettings(operatorId: string): SystemSettings {
+  return systemSettingsStore.get(operatorId) ?? { ...defaultSystemSettings };
+}
+
+function patchSystemSettings(operatorId: string, patch: Partial<SystemSettings>): SystemSettings {
+  const current = getSystemSettings(operatorId);
+  const updated: SystemSettings = { ...current, ...patch };
+  systemSettingsStore.set(operatorId, updated);
+  return updated;
+}
+
 const userRoles = new Set(['admin', 'finance', 'auditor']);
 const userStatuses = new Set(['invited', 'active', 'disabled']);
 
@@ -678,6 +705,68 @@ const server = createServer(async (request, response) => {
 
   if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
     sendJson(response, 200, { status: 'ok' });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/auth/change-password') {
+    const principal = verifyAuthToken(request);
+    if (!principal) {
+      sendJson(response, 401, {
+        status: 'error',
+        code: 'AUTHENTICATION_REQUIRED',
+        message: 'A valid bearer token is required'
+      });
+      return;
+    }
+
+    const user = await accessStore.findUser({
+      operatorId: principal.operatorId,
+      userId: principal.userId
+    });
+
+    if (!user || user.status === 'disabled') {
+      sendJson(response, 401, {
+        status: 'error',
+        code: 'AUTHENTICATION_REQUIRED',
+        message: 'A valid bearer token is required'
+      });
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
+      return;
+    }
+
+    const payload = isRecord(body.value) ? body.value : {};
+    const newPassword = readString(payload, 'password') ?? readString(payload, 'new_password');
+    if (!newPassword || newPassword.length < 8) {
+      sendJson(response, 400, {
+        status: 'error',
+        code: 'INVALID_PASSWORD',
+        message: 'Password must be at least 8 characters'
+      });
+      return;
+    }
+
+    const updated = await accessStore.updateUser({
+      operatorId: principal.operatorId,
+      userId: principal.userId,
+      status: 'active',
+      passwordHash: hashPassword(newPassword)
+    });
+
+    if (!updated) {
+      sendJson(response, 404, { status: 'error', code: 'USER_NOT_FOUND', message: 'User not found' });
+      return;
+    }
+
+    sendJson(response, 200, {
+      token: signAuthToken(updated),
+      expires_in_seconds: 8 * 60 * 60,
+      user: toUserResponse(updated)
+    });
     return;
   }
 
@@ -1633,6 +1722,47 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/system-settings') {
+    sendJson(response, 200, { record: getSystemSettings(getOperatorId(request)) });
+    return;
+  }
+
+  if (request.method === 'PATCH' && url.pathname === '/api/system-settings') {
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
+      return;
+    }
+
+    const payload = isRecord(body.value) ? body.value : {};
+    const patch: Partial<SystemSettings> = {};
+
+    const cronSchedule = readString(payload, 'engine_cron_schedule');
+    if (cronSchedule !== undefined) patch.engineCronSchedule = cronSchedule;
+
+    const batchSize = readNumber(payload, 'batch_size');
+    if (batchSize !== undefined && Number.isInteger(batchSize) && batchSize > 0) {
+      patch.batchSize = batchSize;
+    }
+
+    const suspenseCode = readString(payload, 'suspense_account_code');
+    if (suspenseCode !== undefined) patch.suspenseAccountCode = suspenseCode;
+
+    const maxRetry = readNumber(payload, 'max_retry_attempts');
+    if (maxRetry !== undefined && Number.isInteger(maxRetry) && maxRetry >= 0) {
+      patch.maxRetryAttempts = maxRetry;
+    }
+
+    const backoff = payload.backoff_strategy;
+    if (backoff === 'exponential' || backoff === 'fixed') {
+      patch.backoffStrategy = backoff;
+    }
+
+    const updated = patchSystemSettings(getOperatorId(request), patch);
+    sendJson(response, 200, { record: updated });
+    return;
+  }
+
   sendJson(response, 404, {
     status: 'error',
     code: 'NOT_FOUND',
@@ -1856,6 +1986,15 @@ async function authorizeDashboardRequest(
       status: 'error',
       code: 'AUTHENTICATION_REQUIRED',
       message: 'A valid dashboard session is required'
+    });
+    return false;
+  }
+
+  if (user.status === 'invited') {
+    sendJson(response, 403, {
+      status: 'error',
+      code: 'MUST_CHANGE_PASSWORD',
+      message: 'You must set a new password before accessing the dashboard'
     });
     return false;
   }

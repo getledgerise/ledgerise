@@ -202,6 +202,14 @@ interface ApiKeyRecord {
   created_at: string;
 }
 
+interface SystemSettings {
+  engineCronSchedule: string;
+  batchSize: number;
+  suspenseAccountCode: string;
+  maxRetryAttempts: number;
+  backoffStrategy: 'exponential' | 'fixed';
+}
+
 interface AdapterMappingRow {
   sourcePath: string;
   canonicalField: string;
@@ -518,6 +526,7 @@ export function App() {
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [newApiKeySecret, setNewApiKeySecret] = useState('');
   const [newUserPassword, setNewUserPassword] = useState('');
+  const [systemSettings, setSystemSettings] = useState<SystemSettings | null>(null);
   const [rules, setRules] = useState<MappingRule[]>([]);
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
   const [transactionPage, setTransactionPage] = useState<PageInfo>({
@@ -534,6 +543,8 @@ export function App() {
   const [selectedTransaction, setSelectedTransaction] = useState<TransactionRecord | null>(null);
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [journalFilter, setJournalFilter] = useState<JournalEntry['posting_status'] | 'all'>('all');
+  const [journalDateFrom, setJournalDateFrom] = useState('');
+  const [journalDateTo, setJournalDateTo] = useState('');
   const [selectedJournal, setSelectedJournal] = useState<JournalEntry | null>(null);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
@@ -565,6 +576,9 @@ export function App() {
         if (cancelled) return;
         setAuthUser(response.user);
         setAuthError('');
+        if (response.user.status === 'invited') {
+          setMustChangePassword(true);
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -622,13 +636,14 @@ export function App() {
 
   async function changePassword(newPassword: string) {
     if (!authUser) return;
-    await apiPatch(`/api/users/${encodeURIComponent(authUser.id)}`, {
-      password: newPassword,
-      status: 'active'
+    const response = await apiPost<{ token: string; user: AuthUser }>('/api/auth/change-password', {
+      password: newPassword
     });
-    setAuthUser({ ...authUser, status: 'active' });
+    localStorage.setItem(authTokenStorageKey, response.token);
+    setAuthToken(response.token);
+    setAuthUser(response.user);
     setMustChangePassword(false);
-    setNotice(`Welcome, ${authUser.display_name ?? authUser.email}`);
+    setNotice(`Welcome, ${response.user.display_name ?? response.user.email}`);
   }
 
   async function logout() {
@@ -659,7 +674,8 @@ export function App() {
         journalResponse,
         pollStatusResponse,
         usersResponse,
-        apiKeysResponse
+        apiKeysResponse,
+        systemSettingsResponse
       ] = await Promise.all([
         apiGet<{ records: ChartAccount[] }>('/api/coa'),
         apiGet<{ records: AdapterRecord[] }>('/api/adapters'),
@@ -668,7 +684,8 @@ export function App() {
         apiGet<{ records: JournalEntry[] }>(journalPath),
         apiGet<PollStatusRecord>('/api/adapters/generic-poll/poll-status?limit=3').catch(() => null),
         apiGet<{ records: UserRecord[] }>('/api/users').catch(() => ({ records: [] })),
-        apiGet<{ records: ApiKeyRecord[] }>('/api/api-keys').catch(() => ({ records: [] }))
+        apiGet<{ records: ApiKeyRecord[] }>('/api/api-keys').catch(() => ({ records: [] })),
+        apiGet<{ record: SystemSettings }>('/api/system-settings').catch(() => null)
       ]);
       setAccounts(coaResponse.records);
       setAdapters(adapterResponse.records);
@@ -679,7 +696,13 @@ export function App() {
       setJournalEntries(journalResponse.records);
       setUsers(usersResponse.records);
       setApiKeys(apiKeysResponse.records);
+      if (systemSettingsResponse) setSystemSettings(systemSettingsResponse.record);
     } catch (caught) {
+      const code = caught instanceof Error ? (caught as Error & { code?: string }).code : undefined;
+      if (code === 'MUST_CHANGE_PASSWORD') {
+        setMustChangePassword(true);
+        return;
+      }
       setError(caught instanceof Error ? caught.message : 'Failed to load Ledgerise data');
     } finally {
       setLoading(false);
@@ -902,6 +925,18 @@ export function App() {
     setNotice(`Created API key ${result.record.name}`);
   }
 
+  async function saveSystemSettings(patch: Partial<SystemSettings>) {
+    const result = await apiPatch<{ record: SystemSettings }>('/api/system-settings', {
+      engine_cron_schedule: patch.engineCronSchedule,
+      batch_size: patch.batchSize,
+      suspense_account_code: patch.suspenseAccountCode,
+      max_retry_attempts: patch.maxRetryAttempts,
+      backoff_strategy: patch.backoffStrategy
+    });
+    setSystemSettings(result.record);
+    setNotice('System settings saved');
+  }
+
   async function revokeApiKey(apiKey: ApiKeyRecord) {
     const result = await apiPost<{ record: ApiKeyRecord }>(
       `/api/api-keys/${encodeURIComponent(apiKey.id)}/revoke`,
@@ -930,7 +965,7 @@ export function App() {
     setScreen('journal-log');
   }
 
-  if (authChecking) {
+  if (authChecking && !authUser) {
     return <AuthLoading />;
   }
 
@@ -1021,6 +1056,10 @@ export function App() {
             entries={journalEntries}
             error={error}
             filter={journalFilter}
+            dateFrom={journalDateFrom}
+            dateTo={journalDateTo}
+            setDateFrom={setJournalDateFrom}
+            setDateTo={setJournalDateTo}
             loading={loading}
             retryJournalEntry={retryJournalEntry}
             selectedJournal={selectedJournal}
@@ -1076,6 +1115,8 @@ export function App() {
             users={users}
             error={error}
             setNotice={setNotice}
+            systemSettings={systemSettings}
+            saveSystemSettings={saveSystemSettings}
           />
         ) : null}
       </main>
@@ -1596,6 +1637,10 @@ function JournalLogView(props: {
   entries: JournalEntry[];
   error: string;
   filter: JournalEntry['posting_status'] | 'all';
+  dateFrom: string;
+  dateTo: string;
+  setDateFrom: (value: string) => void;
+  setDateTo: (value: string) => void;
   loading: boolean;
   retryJournalEntry: (entry: JournalEntry) => void;
   selectedJournal: JournalEntry | null;
@@ -1608,6 +1653,10 @@ function JournalLogView(props: {
     entries,
     error,
     filter,
+    dateFrom,
+    dateTo,
+    setDateFrom,
+    setDateTo,
     loading,
     retryJournalEntry,
     selectedJournal,
@@ -1615,6 +1664,12 @@ function JournalLogView(props: {
     closeJournalDrawer,
     setFilter
   } = props;
+  const visibleEntries = entries.filter((entry) => {
+    const date = (entry.transaction?.occurred_at ?? entry.generated_at).slice(0, 10);
+    if (dateFrom && date < dateFrom) return false;
+    if (dateTo && date > dateTo) return false;
+    return true;
+  });
   const posted = entries.filter((entry) => entry.posting_status === 'posted').length;
   const failed = entries.filter((entry) => ['failed', 'retry_exhausted'].includes(entry.posting_status)).length;
   const unmapped = entries.filter((entry) => entry.posting_status === 'unmapped').length;
@@ -1644,9 +1699,9 @@ function JournalLogView(props: {
 
       <div className="table-workspace">
         <div className="filter-bar">
-          <input className="fi" type="date" style={{ width: 140 }} />
+          <input className="fi" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 140 }} />
           <span style={{ color: 'var(--color-text-3)', fontSize: 'var(--text-sm)' }}>to</span>
-          <input className="fi" type="date" style={{ width: 140 }} />
+          <input className="fi" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 140 }} />
           <div className="bar-sep" />
           <select className="fi" value={filter} onChange={(event) => setFilter(event.target.value as JournalEntry['posting_status'] | 'all')}>
             <option value="all">All statuses</option>
@@ -1667,7 +1722,7 @@ function JournalLogView(props: {
           <span className="stat-sub">
             {loading
               ? 'Loading journal entries...'
-              : `${entries.length} entries${lastGeneratedAt ? ` · last generated ${formatDateTime(lastGeneratedAt)}` : ''}`}
+              : `${visibleEntries.length} entries${lastGeneratedAt ? ` · last generated ${formatDateTime(lastGeneratedAt)}` : ''}`}
           </span>
         </div>
         {error ? <div className="form-error journal-error">{error}</div> : null}
@@ -1686,7 +1741,7 @@ function JournalLogView(props: {
               </tr>
             </thead>
             <tbody>
-              {entries.map((entry) => (
+              {visibleEntries.map((entry) => (
                 <tr key={entry.id} onClick={() => selectJournal(entry)}>
                   <td className="mono">{shortId(entry.id)}</td>
                   <td className="mono">{entry.transaction?.source_id ?? shortId(entry.transaction_id)}</td>
@@ -1706,7 +1761,7 @@ function JournalLogView(props: {
                   </td>
                 </tr>
               ))}
-              {entries.length === 0 ? (
+              {visibleEntries.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="dim">No journal entries found for this filter.</td>
                 </tr>
@@ -2095,6 +2150,8 @@ function SettingsView(props: {
   users: UserRecord[];
   error: string;
   setNotice: (notice: string) => void;
+  systemSettings: SystemSettings | null;
+  saveSystemSettings: (patch: Partial<SystemSettings>) => Promise<void>;
 }) {
   const {
     settingsTab,
@@ -2119,7 +2176,9 @@ function SettingsView(props: {
     updateUser,
     users,
     error,
-    setNotice: _setNotice
+    setNotice: _setNotice,
+    systemSettings,
+    saveSystemSettings
   } = props;
   const [selectedAdapterName, setSelectedAdapterName] = useState<string | null>(null);
 
@@ -2211,7 +2270,10 @@ function SettingsView(props: {
               users={users}
             />
           ) : settingsTab === 'system' ? (
-            <Placeholder title="System" subtitle="Runtime settings are environment-controlled for now; dashboard editing will be added when persistence exists." embedded />
+            <SystemSettingsPanel
+              settings={systemSettings}
+              onSave={saveSystemSettings}
+            />
           ) : null}
         </div>
       </div>
@@ -2534,6 +2596,123 @@ function UsersSettingsPanel(props: {
         <div className="drawer-footer">
           <button className="btn btn-ghost" type="button" onClick={() => setApiKeyOpen(false)}>Cancel</button>
           <button className="btn btn-primary" type="submit">Generate Key</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function SystemSettingsPanel(props: {
+  settings: SystemSettings | null;
+  onSave: (patch: Partial<SystemSettings>) => Promise<void>;
+}) {
+  const { settings, onSave } = props;
+  const defaults: SystemSettings = {
+    engineCronSchedule: '0 * * * *',
+    batchSize: 500,
+    suspenseAccountCode: 'X9999',
+    maxRetryAttempts: 5,
+    backoffStrategy: 'exponential'
+  };
+  const initial = settings ?? defaults;
+  const [form, setForm] = useState<SystemSettings>(initial);
+  const [saving, setSaving] = useState(false);
+  const [localError, setLocalError] = useState('');
+
+  useEffect(() => {
+    if (settings) setForm(settings);
+  }, [settings]);
+
+  function discard() {
+    setForm(settings ?? defaults);
+    setLocalError('');
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setLocalError('');
+    try {
+      await onSave(form);
+    } catch (caught) {
+      setLocalError(caught instanceof Error ? caught.message : 'Failed to save system settings');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="settings-panel active">
+      <h2>System</h2>
+      <p className="panel-desc">Engine scheduling, batch processing, suspense account, and retry policy</p>
+      <form onSubmit={submit}>
+        <div className="config-section">
+          <div className="config-section-title">Journal Engine</div>
+          <div className="config-grid">
+            <div className="form-field">
+              <label>Engine Schedule (Cron)</label>
+              <input
+                type="text"
+                value={form.engineCronSchedule}
+                onChange={(e) => setForm({ ...form, engineCronSchedule: e.target.value })}
+              />
+              <div className="hint">Standard cron syntax. Current: runs {form.engineCronSchedule === '0 * * * *' ? 'every hour' : 'on schedule'}.</div>
+            </div>
+            <div className="form-field">
+              <label>Batch Size</label>
+              <input
+                type="number"
+                min="1"
+                max="10000"
+                value={form.batchSize}
+                onChange={(e) => setForm({ ...form, batchSize: Math.max(1, Number(e.target.value)) })}
+              />
+              <div className="hint">Max transactions processed per engine run.</div>
+            </div>
+            <div className="form-field">
+              <label>Suspense Account Code</label>
+              <input
+                type="text"
+                value={form.suspenseAccountCode}
+                onChange={(e) => setForm({ ...form, suspenseAccountCode: e.target.value })}
+              />
+              <div className="hint">COA code where unmapped transactions are parked.</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="config-section">
+          <div className="config-section-title">Retry Policy</div>
+          <div className="config-grid">
+            <div className="form-field">
+              <label>Max Retry Attempts</label>
+              <input
+                type="number"
+                min="0"
+                max="20"
+                value={form.maxRetryAttempts}
+                onChange={(e) => setForm({ ...form, maxRetryAttempts: Math.max(0, Number(e.target.value)) })}
+              />
+              <div className="hint">After this, entry is marked retry_exhausted and held for manual review.</div>
+            </div>
+            <div className="form-field">
+              <label>Backoff Strategy</label>
+              <select
+                value={form.backoffStrategy}
+                onChange={(e) => setForm({ ...form, backoffStrategy: e.target.value as SystemSettings['backoffStrategy'] })}
+              >
+                <option value="exponential">Exponential (5m → 15m → 1h → 4h → 24h)</option>
+                <option value="fixed">Fixed interval</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {localError ? <div className="form-error">{localError}</div> : null}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--s2)' }}>
+          <button className="btn btn-secondary" type="button" onClick={discard} disabled={saving}>Discard Changes</button>
+          <button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
         </div>
       </form>
     </div>
@@ -3775,10 +3954,13 @@ async function apiRequest<T>(path: string, init: RequestInit): Promise<T> {
     if (response.status === 401) {
       localStorage.removeItem(authTokenStorageKey);
     }
+    const code = typeof payload.code === 'string' ? payload.code : undefined;
     const message = Array.isArray(payload.errors)
       ? payload.errors.join(', ')
       : payload.message ?? 'API request failed';
-    throw new Error(message);
+    const error = new Error(message) as Error & { code?: string };
+    error.code = code;
+    throw error;
   }
 
   return payload as T;
