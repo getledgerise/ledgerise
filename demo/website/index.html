@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ledgerise — Accounting automation for payment operators</title>
+  <meta name="description"
+    content="Ledgerise translates your settled transactions into double-entry journal entries and posts them to your accounting system automatically.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <!-- ══════ NAV ══════ -->
+  <nav class="nav">
+    <div class="wrap">
+      <div class="nav-inner">
+        <a href="#" class="nav-logo">
+          <img src="ledgerise-logo.svg" alt="Ledgerise">
+          <span class="nav-logo-name">Ledgerise</span>
+          <span class="nav-logo-beta">beta</span>
+        </a>
+        <div class="nav-gap"></div>
+        <div class="nav-links">
+          <a href="#how-it-works" class="nav-link">How it works</a>
+          <a href="#integrations" class="nav-link">Integrations</a>
+          <a href="https://github.com/keneohiaeri/ledgerise" target="_blank" rel="noopener" class="nav-gh">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+            </svg>
+            GitHub
+          </a>
+          <a href="https://demo.ledgerise.dev" class="nav-cta">Try the demo →</a>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ══════ HERO ══════ -->
+  <section class="hero">
+    <div class="hero-text">
+      <h1 class="hero-h1 fi">Accounting automation<br>for payment operators.</h1>
+      <p class="hero-p fi d1">
+        Ledgerise translates your settled transactions into double-entry journal entries
+        and posts them to your accounting system automatically. Configure the mapping rules.
+        The engine handles the rest.
+      </p>
+      <div class="hero-actions fi d2">
+        <a href="https://demo.ledgerise.dev" class="btn-primary">
+          Try the live demo
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round">
+            <path d="M3 7h8M7 3l4 4-4 4" />
+          </svg>
+        </a>
+        <a href="https://github.com/keneohiaeri/ledgerise" target="_blank" rel="noopener" class="btn-ghost">
+          View on GitHub
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.75"
+            stroke-linecap="round">
+            <path d="M2 2h8v8M10 2L2 10" />
+          </svg>
+        </a>
+      </div>
+      <p class="hero-note fi d3">No sign-up required · Apache 2.0 · Self-host or cloud</p>
+    </div>
+
+    <div class="hero-visual fi d4">
+      <div class="hv-chrome">
+        <div class="hv-titlebar">
+          <span class="hv-dot"></span><span class="hv-dot"></span><span class="hv-dot"></span>
+          <span class="hv-titlebar-label">Journal Engine · Live</span>
+          <span style="width:42px"></span>
+        </div>
+        <div class="hv-body">
+
+          <div class="hv-card">
+            <div class="hv-card-label">Inbound transaction</div>
+            <div class="hv-tx-id">TXN-00419</div>
+            <div class="hv-row">
+              <span class="hv-key">type</span>
+              <span class="hv-val tag">payment.electricity</span>
+            </div>
+            <div class="hv-row">
+              <span class="hv-key">amount</span>
+              <span class="hv-val amt">₦5,000.00</span>
+            </div>
+            <div class="hv-row">
+              <span class="hv-key">biller</span>
+              <span class="hv-val">ikeja-electric</span>
+            </div>
+            <div class="hv-row">
+              <span class="hv-key">product_line</span>
+              <span class="hv-val">consumer-app</span>
+            </div>
+            <div class="hv-row">
+              <span class="hv-key">status</span>
+              <span class="hv-val">settled</span>
+            </div>
+          </div>
+
+          <div class="hv-arrow">
+            <svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M5 14h18M17 8l6 6-6 6" />
+            </svg>
+            <span class="hv-arrow-lbl">Mapping rules<br>applied</span>
+          </div>
+
+          <div class="hv-card">
+            <div class="hv-card-label">Journal entry — JNL-20260601-0419</div>
+            <div class="hv-entry">
+              <span class="hv-dr">DR</span>
+              <div class="hv-acct">
+                <div class="hv-acct-code">A1050</div>
+                <div class="hv-acct-name">Float — BuyPower</div>
+              </div>
+              <span class="hv-entry-amt">₦5,000</span>
+            </div>
+            <div class="hv-entry">
+              <span class="hv-cr">CR</span>
+              <div class="hv-acct">
+                <div class="hv-acct-code">I4010</div>
+                <div class="hv-acct-name">Revenue — Bills</div>
+              </div>
+              <span class="hv-entry-amt">₦5,000</span>
+            </div>
+            <div class="hv-posted">
+              <span class="hv-posted-dot"></span>
+              Posted to Zoho Books · 2m ago
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════ ARCHITECTURE ══════ -->
+  <section class="arch" id="how-it-works">
+    <div class="wrap">
+      <div class="arch-label fi">How it fits into your stack</div>
+      <div class="arch-h2 fi d1">Three independent layers, all swappable</div>
+      <div class="arch-scroll fi d2">
+        <div class="arch-flow">
+          <div class="arch-node">
+            <div class="arch-node-name">Source systems</div>
+            <div class="arch-node-items">Your Webhook endpoint<br>CSV / file export<br>JSON poll API</div>
+          </div>
+          <div class="arch-sep">
+            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M3 9h12M10 4l5 5-5 5" />
+            </svg>
+          </div>
+          <div class="arch-node">
+            <div class="arch-node-name">Inbound adapters</div>
+            <div class="arch-node-items">Normalize to<br>canonical schema<br>(80 tx types)</div>
+          </div>
+          <div class="arch-sep">
+            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M3 9h12M10 4l5 5-5 5" />
+            </svg>
+          </div>
+          <div class="arch-node engine">
+            <div class="arch-node-name">Journal engine</div>
+            <div class="arch-node-items">Apply mapping rules<br>Generate DR/CR entries<br>Retry on failure</div>
+          </div>
+          <div class="arch-sep">
+            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M3 9h12M10 4l5 5-5 5" />
+            </svg>
+          </div>
+          <div class="arch-node">
+            <div class="arch-node-name">Outbound adapters</div>
+            <div class="arch-node-items">Post to accounting<br>system via API /<br>CSV file export</div>
+          </div>
+          <div class="arch-sep">
+            <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M3 9h12M10 4l5 5-5 5" />
+            </svg>
+          </div>
+          <div class="arch-node">
+            <div class="arch-node-name">Accounting systems</div>
+            <div class="arch-node-items">Zoho Books<br>Any CSV import<br>QuickBooks (roadmap)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════ HOW IT ACTUALLY WORKS ══════ -->
+  <section class="detail">
+    <div class="wrap">
+      <div class="detail-grid">
+        <div class="detail-text fi">
+          <h2>Mapping is everything</h2>
+          <p>
+            <strong>Books are always behind</strong> <br>
+            Your transaction system settles in real time. Your accounting records are compiled weekly, or whenever
+            someone finds time.
+          </p>
+          <p>
+            <strong>No engineering bandwidth</strong> <br>
+            Building a custom accounting integration means months of eng time, then maintaining it, then repeating it
+            for each new accounting system.
+          </p>
+          <p>
+            <strong>Mispostings and suspense</strong> <br>
+            New billers, new transaction types, new edge cases. Without a configurable mapping layer, entries go to the
+            wrong accounts or disappear entirely.
+          </p>
+        </div>
+        <div class="fi d2">
+          <div class="fallback">
+            <div class="fallback-header">Mapping rule evaluation order</div>
+            <div class="fallback-row">
+              <div class="fallback-num">1</div>
+              <div class="fallback-info">
+                <div class="fallback-title">Exact biller match</div>
+                <div class="fallback-desc">Matches on product line + biller + transaction type. Most specific rule wins.
+                </div>
+                <div class="fallback-code">consumer-app + ikeja-electric + payment.electricity</div>
+              </div>
+            </div>
+            <div class="fallback-row">
+              <div class="fallback-num">2</div>
+              <div class="fallback-info">
+                <div class="fallback-title">Biller category fallback</div>
+                <div class="fallback-desc">Catches any biller in a category when no exact match exists.</div>
+                <div class="fallback-code">consumer-app + [electricity] + payment.electricity</div>
+              </div>
+            </div>
+            <div class="fallback-row">
+              <div class="fallback-num">3</div>
+              <div class="fallback-info">
+                <div class="fallback-title">Product line catch-all</div>
+                <div class="fallback-desc">A default rule for everything in a product line with no other match.</div>
+                <div class="fallback-code">consumer-app + [any biller] + [any type]</div>
+              </div>
+            </div>
+            <div class="fallback-row">
+              <div class="fallback-num suspense">↓</div>
+              <div class="fallback-info">
+                <div class="fallback-title" style="color:var(--purple)">Suspense account</div>
+                <div class="fallback-desc">No rule matched. Transaction parks at X9999 for review — not dropped, not
+                  misposted.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════ PRODUCTION CHECKLIST ══════ -->
+  <section class="production">
+    <div class="wrap">
+      <h2 class="production-h2 fi">Everything the engine needs to run</h2>
+      <p class="production-p fi d1">The things you don't want to discover are missing after go-live are already built.
+      </p>
+      <div class="prod-grid fi d2">
+        <div class="prod-cell">
+          <div class="prod-cell-title">80 canonical transaction types</div>
+          <div class="prod-cell-desc">Payments, transfers, collections, fees, lending, savings, FX, cards and agency
+            banking are all covered by a single schema.</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-title">No-code mapping rules</div>
+          <div class="prod-cell-desc">Finance teams configure debit/credit accounts per product line, biller, and
+            transaction type in the UI.</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-title">Automatic reversal handling</div>
+          <div class="prod-cell-desc">Reversed transactions automatically generate mirror journal entries. No manual
+            correction needed; your books stay balanced.</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-title">Suspense accounts</div>
+          <div class="prod-cell-desc">Unmapped transactions park in a suspense account rather than
+            disappearing. Nothing falls through the cracks.</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-title">Full audit trail</div>
+          <div class="prod-cell-desc">Every posted entry links back to its source transaction. Every admin action logs
+            to an immutable audit table, downloadable as CSV.</div>
+        </div>
+        <div class="prod-cell">
+          <div class="prod-cell-title">AES-256-GCM credentials</div>
+          <div class="prod-cell-desc">All adapter credentials are encrypted at rest. Rate limiting and proxy-aware IP
+            detection on every ingest endpoint.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════ INTEGRATIONS ══════ -->
+  <section class="integrations" id="integrations">
+    <div class="wrap">
+      <h2 class="int-h2 fi">Connect anything, post anywhere.</h2>
+      <p class="int-p fi d1">Generic adapters work today with any system that can send a webhook, export a CSV, or
+        expose a JSON API. The adapter interface is open — new sources and destinations are community contributions.</p>
+      <div class="int-cols fi d2">
+        <div>
+          <div class="int-col-label">Inbound — transaction sources</div>
+          <div class="int-list">
+            <div class="int-row">
+              <div class="int-ico">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <rect x="1" y="3.5" width="14" height="9" rx="1.5" />
+                  <line x1="1" y1="7" x2="15" y2="7" />
+                </svg>
+              </div>
+              <div class="int-info">
+                <div class="int-name">Generic Webhook</div>
+                <div class="int-mode">Receives mapped JSON payloads from any source system</div>
+              </div>
+              <span class="int-tag built"><span class="int-tag-dot"></span>Built</span>
+            </div>
+            <div class="int-row">
+              <div class="int-ico">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <path d="M10 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V5l-3-3z" />
+                  <path d="M10 2v3h3" />
+                  <line x1="5" y1="8" x2="11" y2="8" />
+                  <line x1="5" y1="10.5" x2="9" y2="10.5" />
+                </svg>
+              </div>
+              <div class="int-info">
+                <div class="int-name">Generic CSV</div>
+                <div class="int-mode">File import with configurable column mapping</div>
+              </div>
+              <span class="int-tag built"><span class="int-tag-dot"></span>Built</span>
+            </div>
+            <div class="int-row">
+              <div class="int-ico">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <circle cx="8" cy="8" r="6" />
+                  <path d="M8 5v3l2 2" />
+                </svg>
+              </div>
+              <div class="int-info">
+                <div class="int-name">Generic Poll</div>
+                <div class="int-mode">Scheduled fetch from any JSON API · cursor-safe</div>
+              </div>
+              <span class="int-tag built"><span class="int-tag-dot"></span>Built</span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="int-col-label">Outbound — accounting systems</div>
+          <div class="int-list">
+            <div class="int-row">
+              <div class="int-ico">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <line x1="4" y1="13" x2="4" y2="7" />
+                  <line x1="8" y1="13" x2="8" y2="3" />
+                  <line x1="12" y1="13" x2="12" y2="9" />
+                  <line x1="1" y1="15" x2="15" y2="15" />
+                </svg>
+              </div>
+              <div class="int-info">
+                <div class="int-name">Zoho Books</div>
+                <div class="int-mode">Manual Journals API · OAuth 2.0</div>
+              </div>
+              <span class="int-tag built"><span class="int-tag-dot"></span>Built</span>
+            </div>
+            <div class="int-row">
+              <div class="int-ico">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <path d="M10 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V5l-3-3z" />
+                  <path d="M10 2v3h3" />
+                  <line x1="5" y1="8" x2="11" y2="8" />
+                  <line x1="5" y1="10.5" x2="9" y2="10.5" />
+                </svg>
+              </div>
+              <div class="int-info">
+                <div class="int-name">Journal CSV Export</div>
+                <div class="int-mode">Any system accepting file import · pull via API</div>
+              </div>
+              <span class="int-tag built"><span class="int-tag-dot"></span>Built</span>
+            </div>
+            <div class="int-row">
+              <div class="int-ico">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                  <rect x="2" y="2" width="12" height="12" rx="1.5" />
+                  <line x1="2" y1="8" x2="14" y2="8" />
+                  <line x1="8" y1="2" x2="8" y2="14" />
+                </svg>
+              </div>
+              <div class="int-info">
+                <div class="int-name">QuickBooks · Wave · Xero</div>
+                <div class="int-mode">In development</div>
+              </div>
+              <span class="int-tag roadmap">Roadmap</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ══════ FINAL CTA ══════ -->
+  <section class="cta-section">
+    <div class="wrap">
+      <h2 class="cta-h2 fi">Try it yourself.</h2>
+      <p class="cta-p fi d1">The live demo is fully interactive with transactions, mapping rules, journal log, adapters,
+        and settings. <br> No sign-up, no account required.</p>
+      <div class="fi d2">
+        <a href="https://demo.ledgerise.dev" class="btn-primary" style="display:inline-flex">
+          Open the live demo
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round">
+            <path d="M3 7h8M7 3l4 4-4 4" />
+          </svg>
+        </a>
+      </div>
+      <p class="cta-note fi d3">Or <a href="https://github.com/keneohiaeri/ledgerise" style="color:var(--primary)">clone
+          the repo</a> and run it locally in under 5 minutes.</p>
+    </div>
+  </section>
+
+  <!-- ══════ FOOTER ══════ -->
+  <footer class="footer">
+    <div class="wrap">
+      <div class="footer-inner">
+        <div class="footer-logo">
+          <img src="ledgerise-logo.svg" alt="Ledgerise">
+          <span class="footer-logo-name">Ledgerise</span>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/keneohiaeri/ledgerise" target="_blank" rel="noopener"
+            class="footer-link">GitHub</a>
+          <a href="https://github.com/keneohiaeri/ledgerise/blob/main/LICENSE" target="_blank" rel="noopener"
+            class="footer-link">Apache 2.0</a>
+          <a href="https://github.com/keneohiaeri/ledgerise/tree/main/docs" target="_blank" rel="noopener"
+            class="footer-link">Docs</a>
+          <a href="https://demo.ledgerise.dev" class="footer-link">Live Demo →</a>
+        </div>
+        <span class="footer-copy">© 2026 Ledgerise</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const obs = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); obs.unobserve(e.target); } });
+    }, { threshold: 0.07, rootMargin: '0px 0px -24px 0px' });
+    document.querySelectorAll('.fi').forEach(el => obs.observe(el));
+
+  </script>
+</body>
+
+</html>
