@@ -27,8 +27,8 @@ Source System          Ledgerise                  Accounting System
 Paystack         →   Inbound Adapter                       
 Flutterwave      →   (normalizes to          →   Journal Engine   →   Zoho Books
 M-Pesa           →    canonical schema)      →   (maps to COA)    →   QuickBooks
-CSV Upload       →                                                 →   Wave
-Any System       →                                                 →   Any System
+CSV Upload       →                                                →   Wave
+Any System       →                                                →   Any System
 ```
 
 1. **Inbound adapters** normalize transaction data from any source into a standard internal format
@@ -48,31 +48,36 @@ The engine and both adapter layers are independently swappable. Adding a new sou
 - **Reversal handling** that automatically generates mirror journal entries for reversed transactions
 - **Suspense accounts** that park unclassified transactions for manual review rather than dropping or misposting them
 - **Journal log and audit trail** with a traceable path from every posted entry back to the source transaction
+- **Journal CSV export API** for pulling posting batches into any accounting system that accepts file import
 - **Multi-currency support** with ISO 4217 currency codes on every transaction record
 - **Test environment protection** that blocks test transactions from reaching the accounting system
+- **Role-based access control** with admin and operator roles, user management, and a full audit log
+- **AES-256-GCM credential encryption** for all stored adapter credentials
+- **Rate limiting** on ingest endpoints with proxy-aware IP detection
+- **Structured logging** and a `/healthcheck` endpoint for monitoring
 
 ---
 
 ## Supported Integrations
 
 ### Inbound (transaction sources)
+
 | Adapter | Mode | Status |
 |---|---|---|
-| Paystack | Webhook | Planned |
-| Flutterwave | Webhook | Planned |
-| Interswitch | Webhook | Planned |
-| M-Pesa (Daraja) | Poll | Planned |
-| Generic CSV | File Import | Planned |
-| Generic Webhook | Webhook | Planned |
+| Generic Webhook | Webhook | Built |
+| Generic CSV | File Import | Built |
+| Generic Poll | Poll | Built |
 
 ### Outbound (accounting systems)
+
 | Adapter | Status |
 |---|---|
-| Zoho Books | Planned |
+| Generic Journal CSV | Built |
+| Zoho Books | Built |
 | QuickBooks | Roadmap |
 | Wave | Roadmap |
 
-Want to add an integration? See [Building an Adapter](#building-an-adapter).
+Want to add an integration? See [docs/EXTERNAL_ADAPTER_GUIDE.md](docs/EXTERNAL_ADAPTER_GUIDE.md).
 
 ---
 
@@ -84,7 +89,7 @@ Ledgerise is open source and can be run entirely on your own infrastructure.
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/ledgerise.git
+git clone https://github.com/keneohiaeri/ledgerise.git
 cd ledgerise
 
 # Copy and configure environment variables
@@ -93,20 +98,27 @@ cp .env.example .env
 # Install dependencies
 npm install
 
-# Start the web, API, and worker workspaces
-npm run dev
+# Run database migrations
+for f in infra/migrations/*.sql; do
+  psql "$DATABASE_URL" -f "$f"
+done
+
+# Seed the default operator and COA
+psql "$DATABASE_URL" -f infra/seed/0001_local_operator_and_adapters.sql
+psql "$DATABASE_URL" -f infra/seed/0002_default_coa.sql
+
+# Build and start
+npm run build
+node apps/api/dist/index.js
 ```
 
-Ledgerise targets Node.js, TypeScript, React, and a relational database. PostgreSQL is the primary database target for the first implementation pass; MySQL support can be added behind the same data-access boundary later.
+On first start, Ledgerise creates a bootstrap admin account using the credentials in your `.env`. Change the password on first login.
+
+For full deployment instructions including VPS, Render, Railway, nginx reverse proxy, and systemd service setup, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ### Cloud-Hosted
 
-A managed cloud version of Ledgerise is available for operators who prefer not to manage infrastructure. The cloud version includes:
-
-- Managed adapter hosting and scheduling
-- Automated schema and engine updates
-- Uptime monitoring and alerting
-- Multi-tenant operator isolation
+A managed cloud version is available for operators who prefer not to manage infrastructure. The cloud version includes managed adapter hosting, automated updates, uptime monitoring, and multi-tenant isolation.
 
 Join the waitlist: [ledgerise.dev](https://ledgerise.dev)
 
@@ -114,37 +126,40 @@ Join the waitlist: [ledgerise.dev](https://ledgerise.dev)
 
 ## Configuration
 
-Ledgerise is configured through a combination of environment variables (infrastructure settings) and the mapping configuration UI (business rules).
-
 ### Environment Variables
 
 ```env
 # Database
 DATABASE_URL=postgresql://user:password@localhost:5432/ledgerise
 
+# Auth
+AUTH_TOKEN_SECRET=<generate with: openssl rand -hex 32>
+
+# Credential encryption (required in production)
+LEDGERISE_CREDENTIALS_KEY=<generate with: openssl rand -hex 32>
+
+# Bootstrap admin (created on first start)
+LEDGERISE_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+LEDGERISE_BOOTSTRAP_ADMIN_PASSWORD=changeme
+
 # Engine
 ENGINE_SCHEDULE_CRON=0 * * * *       # How often the journal engine runs
 ENGINE_BATCH_SIZE=500                  # Max transactions per engine run
 SUSPENSE_ACCOUNT_CODE=9999            # COA code for unclassified transactions
-
-# Accounting system (outbound adapter)
-ZOHO_CLIENT_ID=...
-ZOHO_CLIENT_SECRET=...
-ZOHO_ORGANIZATION_ID=...
 ```
 
 ### Mapping Rules
 
 Mapping rules are configured through the Ledgerise UI under **Settings > Mapping Rules**. Each rule defines:
 
-- **Product line** - which of your product lines this rule applies to
-- **Biller** (optional) - the specific biller or counterparty
-- **Biller category** (optional) - used as a fallback when no exact biller match exists
-- **Debit account** - the COA account to debit
-- **Credit account(s)** - one or more COA accounts to credit, with split percentages if applicable
-- **Status** - active or inactive
+- **Product line** — which of your product lines this rule applies to
+- **Biller** (optional) — the specific biller or counterparty
+- **Biller category** (optional) — used as a fallback when no exact biller match exists
+- **Debit account** — the COA account to debit
+- **Credit account(s)** — one or more COA accounts to credit, with split percentages if applicable
+- **Status** — active or inactive
 
-Rules are evaluated in priority order: exact biller match, then biller category, then product line catch-all.
+Rules are evaluated in priority order: exact biller match → biller category → product line catch-all.
 
 ---
 
@@ -161,13 +176,26 @@ Every adapter must implement four methods:
 | `normalize(input)` | Converts raw input to canonical transaction records |
 | `healthcheck()` | Verifies connectivity to the source system |
 
-Full specification: [ADAPTER_SPEC.md](docs/ADAPTER_SPEC.md)
+- Full interface specification: [docs/ADAPTER_SPEC.md](docs/ADAPTER_SPEC.md)
+- Step-by-step contributor guide: [docs/EXTERNAL_ADAPTER_GUIDE.md](docs/EXTERNAL_ADAPTER_GUIDE.md)
+- Canonical transaction schema: [schemas/transaction.schema.json](schemas/transaction.schema.json)
+- Schema field reference: [docs/SCHEMA_REFERENCE.md](docs/SCHEMA_REFERENCE.md)
 
-Canonical transaction schema: [transaction.schema.json](schemas/transaction.schema.json)
+To contribute an adapter to the official registry, open a pull request with your adapter in the `/adapters` directory. Your adapter must include unit tests, fixture files, and a README. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-Schema field reference: [SCHEMA_REFERENCE.md](docs/SCHEMA_REFERENCE.md)
+---
 
-To contribute an adapter to the official registry, open a pull request with your adapter in the `/adapters` directory. Your adapter must include unit tests, fixture files, and a README. See the [contribution guide](CONTRIBUTING.md) for details.
+## Integrating via Journal CSV
+
+If your accounting system accepts CSV file import, you can pull posting batches from Ledgerise using the Journal CSV API without writing an outbound adapter at all.
+
+See [docs/JOURNAL_CSV_API_GUIDE.md](docs/JOURNAL_CSV_API_GUIDE.md) for the full API reference.
+
+---
+
+## Data Management
+
+For backup, restore, and retention guidance see [docs/DATA_MANAGEMENT.md](docs/DATA_MANAGEMENT.md).
 
 ---
 
@@ -176,7 +204,7 @@ To contribute an adapter to the official registry, open a pull request with your
 ```
 ledgerise/
 ├── apps/
-│   ├── web/             # React finance/admin UI
+│   ├── web/             # React finance/admin dashboard
 │   ├── api/             # Node/TypeScript HTTP API
 │   └── worker/          # Scheduled jobs and posting retries
 ├── core/
@@ -198,29 +226,42 @@ ledgerise/
 │   └── seed/
 ├── schemas/
 │   └── transaction.schema.json
-├── docs/
-│   ├── ADAPTER_SPEC.md
-│   └── SCHEMA_REFERENCE.md
-├── CONTRIBUTING.md
-└── README.md
+└── docs/
+    ├── ADAPTER_SPEC.md
+    ├── SCHEMA_REFERENCE.md
+    ├── EXTERNAL_ADAPTER_GUIDE.md
+    ├── DEPLOYMENT.md
+    ├── DATA_MANAGEMENT.md
+    └── JOURNAL_CSV_API_GUIDE.md
 ```
 
 ---
 
 ## Roadmap
 
-- [ ] Zoho Books outbound adapter
+- [x] Canonical transaction schema (80 transaction types)
+- [x] Database ingestion layer
+- [x] Generic webhook, CSV, and poll inbound adapters
+- [x] Chart of Accounts management with CSV import
+- [x] Configurable mapping rules with three-tier fallback
+- [x] Journal engine (mapping → double-entry journal entries)
+- [x] Journal log, posting queue, and retry handling
+- [x] Zoho Books and Generic CSV outbound adapters
+- [x] Poll runner with cursor safety
+- [x] React dashboard (journal log, COA, mapping rules, adapter config, settings)
+- [x] Role-based access control and user management
+- [x] AES-256-GCM credential encryption
+- [x] Audit log with CSV download
+- [x] Production hardening (rate limiting, structured logging, healthcheck)
+- [x] Deployment documentation
 - [ ] Paystack inbound adapter
 - [ ] Flutterwave inbound adapter
-- [ ] Generic webhook inbound adapter
-- [ ] Generic CSV inbound adapter
-- [ ] Mapping rules UI
-- [ ] Journal log and audit dashboard
-- [ ] QuickBooks outbound adapter
 - [ ] M-Pesa inbound adapter
-- [ ] Multi-tenant cloud version
+- [ ] QuickBooks outbound adapter
 - [ ] Wave outbound adapter
 - [ ] Xero outbound adapter
+- [ ] Formal test suite
+- [ ] Multi-tenant cloud version
 
 ---
 
