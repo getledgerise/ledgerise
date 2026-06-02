@@ -23,7 +23,10 @@
     "verify:generic-webhook": "node scripts/verify-generic-webhook.mjs",
     "verify:generic-csv": "node scripts/verify-generic-csv.mjs",
     "verify:generic-poll": "node scripts/verify-generic-poll.mjs",
-    "verify:mapping": "node scripts/verify-mapping.mjs"
+    "verify:mapping": "node scripts/verify-mapping.mjs",
+    "verify:engine": "node scripts/verify-engine.mjs",
+    "verify:posting": "node scripts/verify-posting.mjs",
+    "verify:outbound-csv": "node scripts/verify-outbound-csv.mjs"
   },
   "engines": {
     "node": ">=20"

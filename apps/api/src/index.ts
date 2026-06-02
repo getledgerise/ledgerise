@@ -1,6 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import {
+  postJournals as postGenericJournalCsv,
+  validate as validateGenericJournalCsv
+} from '@ledgerise/adapter-outbound-generic-journal-csv';
+import {
   IngestionService,
   InMemoryIngestionRepository,
   type IngestionErrorListInput,
@@ -19,15 +23,25 @@ import {
   type UpdateMappingRule
 } from '@ledgerise/core-mapping';
 import { PostgresMappingRepository } from '@ledgerise/core-mapping/postgres';
+import {
+  InMemoryPostingRepository,
+  PostingService,
+  PostingStateError,
+  type JournalLogEntry,
+  type PostingBatch,
+  type PostingRepository
+} from '@ledgerise/core-posting';
+import { PostgresPostingRepository } from '@ledgerise/core-posting/postgres';
 
 import { findAdapter, listAdapters } from './adapterRegistry.js';
 
 const port = Number(process.env.API_PORT ?? '3000');
 
-const { ingestionRepository, mappingRepository, defaultOperatorId, repositoryKind } =
+const { ingestionRepository, mappingRepository, postingRepository, defaultOperatorId, repositoryKind } =
   await createRepositories();
 const ingestionService = new IngestionService(ingestionRepository);
 const mappingService = new MappingService(mappingRepository);
+const postingService = new PostingService(postingRepository);
 
 const server = createServer(async (request, response) => {
   applyCors(response);
@@ -182,6 +196,172 @@ const server = createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/journal-entries') {
+    const operatorId = getOperatorId(request);
+    const filters = parseJournalEntryListQuery(url, operatorId);
+
+    if (!filters.ok) {
+      sendJson(response, 400, filters.error);
+      return;
+    }
+
+    const journalEntries = await postingService.listJournalEntries(filters.value);
+    sendJson(response, 200, {
+      records: journalEntries.records.map(toJournalEntryResponse),
+      page: journalEntries.page
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/posting-batches/generic-journal-csv') {
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
+      return;
+    }
+
+    const payload = isRecord(body.value) ? body.value : {};
+    const rawLimit = readNumber(payload, 'limit');
+    const limit = rawLimit === undefined ? 100 : rawLimit;
+
+    try {
+      const batch = await postingService.createPostingBatch({
+        operatorId: getOperatorId(request),
+        adapterName: 'generic-journal-csv',
+        journalEntryIds: readStringArray(payload, 'journal_entry_ids') ?? readStringArray(payload, 'journalEntryIds'),
+        limit
+      });
+      const outboundBatch = toOutboundJournalBatch(batch);
+      const validation = validateGenericJournalCsv(outboundBatch);
+
+      if (!validation.valid) {
+        const completed = await postingService.completePostingBatch({
+          operatorId: getOperatorId(request),
+          batchId: batch.id,
+          adapterName: 'generic-journal-csv',
+          results: batch.entries.map((entry) => ({
+            journalEntryId: entry.id,
+            status: 'failed',
+            errorCode: 'VALIDATION_FAILED',
+            errorMessage: validation.errors.map((error) => `${error.field}: ${error.message}`).join('; ')
+          }))
+        });
+        sendJson(response, 422, {
+          status: 'error',
+          code: 'VALIDATION_FAILED',
+          batch: completed ? toPostingBatchResponse(completed) : undefined,
+          errors: validation.errors
+        });
+        return;
+      }
+
+      const adapterResult = await postGenericJournalCsv(outboundBatch);
+      const completed = await postingService.completePostingBatch({
+        operatorId: getOperatorId(request),
+        batchId: batch.id,
+        adapterName: 'generic-journal-csv',
+        results: [
+          ...adapterResult.posted.map((result) => ({
+            journalEntryId: result.journal_entry_id,
+            status: 'posted' as const,
+            externalReference: result.external_reference
+          })),
+          ...adapterResult.failed.map((result) => ({
+            journalEntryId: result.journal_entry_id,
+            status: 'failed' as const,
+            errorCode: result.code,
+            errorMessage: result.message
+          }))
+        ]
+      });
+
+      sendJson(response, adapterResult.status === 'ok' ? 201 : 207, {
+        status: adapterResult.status,
+        batch: completed ? toPostingBatchResponse(completed) : undefined,
+        posted: adapterResult.posted,
+        failed: adapterResult.failed,
+        artifact: adapterResult.artifact
+      });
+    } catch (error) {
+      if (error instanceof PostingStateError) {
+        sendJson(response, error.code === 'NO_POSTABLE_JOURNALS' ? 409 : 400, {
+          status: 'error',
+          code: error.code,
+          message: error.message
+        });
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
+  const journalEntryMatch = /^\/api\/journal-entries\/([^/]+)$/.exec(url.pathname);
+
+  if (request.method === 'GET' && journalEntryMatch) {
+    const journalEntryId = decodeURIComponent(journalEntryMatch[1] ?? '');
+    const journalEntry = await postingService.findJournalEntry({
+      operatorId: getOperatorId(request),
+      journalEntryId
+    });
+
+    if (!journalEntry) {
+      sendJson(response, 404, {
+        status: 'error',
+        code: 'JOURNAL_ENTRY_NOT_FOUND',
+        message: `Journal entry "${journalEntryId}" was not found`
+      });
+      return;
+    }
+
+    sendJson(response, 200, { record: toJournalEntryResponse(journalEntry) });
+    return;
+  }
+
+  const journalEntryRetryMatch = /^\/api\/journal-entries\/([^/]+)\/retry$/.exec(url.pathname);
+
+  if (request.method === 'POST' && journalEntryRetryMatch) {
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
+      return;
+    }
+
+    const journalEntryId = decodeURIComponent(journalEntryRetryMatch[1] ?? '');
+    const retryInput = isRecord(body.value) ? body.value : {};
+
+    try {
+      const journalEntry = await postingService.requestManualRetry({
+        operatorId: getOperatorId(request),
+        journalEntryId,
+        adapterName: readString(retryInput, 'adapter_name') ?? 'generic-journal-csv',
+        requestedByUserId: getHeader(request.headers['x-user-id'])
+      });
+
+      if (!journalEntry) {
+        sendJson(response, 404, {
+          status: 'error',
+          code: 'JOURNAL_ENTRY_NOT_FOUND',
+          message: `Journal entry "${journalEntryId}" was not found`
+        });
+        return;
+      }
+
+      sendJson(response, 200, { record: toJournalEntryResponse(journalEntry) });
+    } catch (error) {
+      if (error instanceof PostingStateError) {
+        sendJson(response, 409, {
+          status: 'error',
+          code: error.code,
+          message: error.message
+        });
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
   if (request.method === 'GET' && url.pathname === '/api/coa') {
     sendJson(response, 200, {
       records: await mappingService.listChartAccounts(getOperatorId(request))
@@ -279,6 +459,7 @@ server.listen(port, () => {
 async function createRepositories(): Promise<{
   ingestionRepository: IngestionRepository;
   mappingRepository: MappingRepository;
+  postingRepository: PostingRepository;
   defaultOperatorId: string;
   repositoryKind: 'memory' | 'postgres';
 }> {
@@ -286,6 +467,7 @@ async function createRepositories(): Promise<{
     return {
       ingestionRepository: new InMemoryIngestionRepository(),
       mappingRepository: new InMemoryMappingRepository(),
+      postingRepository: new InMemoryPostingRepository(),
       defaultOperatorId: process.env.DEFAULT_OPERATOR_ID ?? 'local-operator',
       repositoryKind: 'memory'
     };
@@ -295,6 +477,9 @@ async function createRepositories(): Promise<{
     connectionString: process.env.DATABASE_URL
   });
   const mappingRepository = new PostgresMappingRepository({
+    connectionString: process.env.DATABASE_URL
+  });
+  const postingRepository = new PostgresPostingRepository({
     connectionString: process.env.DATABASE_URL
   });
   const defaultOperatorId =
@@ -310,6 +495,7 @@ async function createRepositories(): Promise<{
   return {
     ingestionRepository,
     mappingRepository,
+    postingRepository,
     defaultOperatorId,
     repositoryKind: 'postgres'
   };
@@ -352,7 +538,7 @@ function sendJson(
 function applyCors(response: ServerResponse) {
   response.setHeader('access-control-allow-origin', '*');
   response.setHeader('access-control-allow-methods', 'GET,POST,PATCH,OPTIONS');
-  response.setHeader('access-control-allow-headers', 'content-type,x-operator-id');
+  response.setHeader('access-control-allow-headers', 'content-type,x-operator-id,x-user-id');
 }
 
 function getHeader(value: string | string[] | undefined): string | undefined {
@@ -404,6 +590,114 @@ function toIngestionErrorResponse(error: StoredIngestionError) {
   };
 }
 
+function toJournalEntryResponse(entry: JournalLogEntry) {
+  return {
+    id: entry.id,
+    transaction_id: entry.transactionId,
+    entry_type: entry.entryType,
+    status: entry.status,
+    posting_status: entry.postingStatus,
+    currency: entry.currency,
+    amount: entry.amount,
+    mapping_rule_id: entry.mappingRuleId,
+    mapping_rule_version: entry.mappingRuleVersion,
+    reversal_of_journal_entry_id: entry.reversalOfJournalEntryId,
+    generated_at: entry.generatedAt,
+    posted_at: entry.postedAt,
+    last_posting_attempt_at: entry.lastPostingAttemptAt,
+    last_posting_error: entry.lastPostingError,
+    attempt_count: entry.attemptCount,
+    lines: entry.lines.map((line) => ({
+      account_code: line.accountCode,
+      side: line.side,
+      amount: line.amount,
+      currency: line.currency,
+      line_order: line.lineOrder
+    })),
+    transaction: entry.transaction
+      ? {
+          id: entry.transaction.id,
+          source_id: entry.transaction.sourceId,
+          status: entry.transaction.status,
+          type: entry.transaction.type,
+          occurred_at: entry.transaction.occurredAt,
+          settled_at: entry.transaction.settledAt,
+          source_adapter: entry.transaction.sourceAdapter,
+          source_system: entry.transaction.sourceSystem,
+          product_line: entry.transaction.productLine,
+          product_biller: entry.transaction.productBiller,
+          product_biller_category: entry.transaction.productBillerCategory
+        }
+      : undefined,
+    attempts: entry.attempts.map((attempt) => ({
+      id: attempt.id,
+      adapter_name: attempt.adapterName,
+      status: attempt.status,
+      attempt_number: attempt.attemptNumber,
+      external_reference: attempt.externalReference,
+      error_code: attempt.errorCode,
+      error_message: attempt.errorMessage,
+      requested_by_user_id: attempt.requestedByUserId,
+      occurred_at: attempt.occurredAt
+    })),
+    latest_attempt: entry.latestAttempt
+      ? {
+          id: entry.latestAttempt.id,
+          adapter_name: entry.latestAttempt.adapterName,
+          status: entry.latestAttempt.status,
+          attempt_number: entry.latestAttempt.attemptNumber,
+          external_reference: entry.latestAttempt.externalReference,
+          error_code: entry.latestAttempt.errorCode,
+          error_message: entry.latestAttempt.errorMessage,
+          requested_by_user_id: entry.latestAttempt.requestedByUserId,
+          occurred_at: entry.latestAttempt.occurredAt
+        }
+      : undefined
+  };
+}
+
+function toPostingBatchResponse(batch: PostingBatch) {
+  return {
+    id: batch.id,
+    adapter_name: batch.adapterName,
+    status: batch.status,
+    journal_entry_count: batch.journalEntryCount,
+    created_at: batch.createdAt,
+    updated_at: batch.updatedAt,
+    entries: batch.entries.map(toJournalEntryResponse)
+  };
+}
+
+function toOutboundJournalBatch(batch: PostingBatch) {
+  return {
+    id: batch.id,
+    operator_id: batch.operatorId,
+    adapter_name: batch.adapterName,
+    created_at: batch.createdAt,
+    entries: batch.entries.map((entry) => ({
+      id: entry.id,
+      transaction_id: entry.transactionId,
+      source_id: entry.transaction?.sourceId,
+      transaction_type: entry.transaction?.type,
+      product_line: entry.transaction?.productLine,
+      product_biller: entry.transaction?.productBiller,
+      entry_type: entry.entryType,
+      currency: entry.currency,
+      amount: entry.amount,
+      generated_at: entry.generatedAt,
+      mapping_rule_id: entry.mappingRuleId,
+      mapping_rule_version: entry.mappingRuleVersion,
+      lines: entry.lines.map((line) => ({
+        account_code: line.accountCode,
+        side: line.side,
+        amount: line.amount,
+        currency: line.currency,
+        line_order: line.lineOrder
+      }))
+    }))
+  };
+}
+
 type ParsedQuery<T> =
   | {
       ok: true;
@@ -420,6 +714,14 @@ type ParsedQuery<T> =
 
 const transactionStatuses = new Set(['pending', 'settled', 'failed', 'reversed', 'disputed']);
 const postingStatuses = new Set(['unposted']);
+const journalPostingStatuses = new Set([
+  'generated',
+  'posting',
+  'posted',
+  'failed',
+  'unmapped',
+  'retry_exhausted'
+]);
 const environments = new Set(['live', 'test']);
 const ingestionErrorTypes = new Set([
   'schema_validation',
@@ -511,6 +813,36 @@ function parseIngestionErrorListQuery(
       sourceId: getQueryParam(url, 'source_id'),
       occurredFrom,
       occurredTo
+    }
+  };
+}
+
+function parseJournalEntryListQuery(
+  url: URL,
+  operatorId: string
+): ParsedQuery<{
+  operatorId: string;
+  limit: number;
+  offset: number;
+  postingStatus?: JournalLogEntry['postingStatus'];
+}> {
+  const pagination = parsePagination(url);
+
+  if (!pagination.ok) {
+    return pagination;
+  }
+
+  const postingStatus = getQueryParam(url, 'posting_status');
+  if (postingStatus && !journalPostingStatuses.has(postingStatus)) {
+    return invalidQuery(`Unsupported journal posting status "${postingStatus}"`);
+  }
+
+  return {
+    ok: true,
+    value: {
+      operatorId,
+      ...pagination.value,
+      postingStatus: postingStatus as JournalLogEntry['postingStatus']
     }
   };
 }
@@ -665,6 +997,12 @@ function readNullableString(input: Record<string, unknown>, key: string): string
 function readNumber(input: Record<string, unknown>, key: string): number | undefined {
   const value = input[key];
   return typeof value === 'number' ? value : undefined;
+}
+
+function readStringArray(input: Record<string, unknown>, key: string): string[] | undefined {
+  const value = input[key];
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

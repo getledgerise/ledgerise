@@ -9,6 +9,10 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@ledgerise/core-engine": "0.1.0",
+    "@ledgerise/core-ingestion": "0.1.0"
+  },
   "devDependencies": {
     "tsx": "^4.7.0"
   }

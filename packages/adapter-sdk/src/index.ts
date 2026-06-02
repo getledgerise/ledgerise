@@ -84,6 +84,68 @@ export interface AdapterModule<TInput = unknown, TCursor = unknown> {
   healthcheck(): Promise<AdapterHealthcheckResult>;
 }
 
+export interface OutboundJournalLine {
+  account_code: string;
+  side: 'debit' | 'credit';
+  amount: number;
+  currency: string;
+  line_order: number;
+}
+
+export interface OutboundJournalEntry {
+  id: string;
+  transaction_id: string;
+  source_id?: string;
+  transaction_type?: string;
+  product_line?: string;
+  product_biller?: string;
+  entry_type: string;
+  currency: string;
+  amount: number;
+  generated_at: string;
+  mapping_rule_id?: string;
+  mapping_rule_version?: number;
+  lines: OutboundJournalLine[];
+}
+
+export interface OutboundJournalBatch {
+  id: string;
+  operator_id: string;
+  adapter_name: string;
+  created_at: string;
+  entries: OutboundJournalEntry[];
+}
+
+export interface OutboundJournalPostSuccess {
+  journal_entry_id: string;
+  external_reference: string;
+}
+
+export interface OutboundJournalPostFailure {
+  journal_entry_id: string;
+  code: AdapterErrorCode;
+  message: string;
+}
+
+export interface OutboundJournalPostResult {
+  status: 'ok' | 'partial' | 'error';
+  batch_id: string;
+  posted: OutboundJournalPostSuccess[];
+  failed: OutboundJournalPostFailure[];
+  artifact?: {
+    content_type: string;
+    filename: string;
+    content: string;
+  };
+}
+
+export interface OutboundJournalAdapterModule {
+  meta(): AdapterMeta;
+  validate(input: OutboundJournalBatch): AdapterValidationResult;
+  postJournals(input: OutboundJournalBatch): Promise<OutboundJournalPostResult>;
+  healthcheck(): Promise<AdapterHealthcheckResult>;
+}
+
 export function ok<TRecord = CanonicalTransaction, TCursor = unknown>(
   records: TRecord[],
   cursor?: TCursor,

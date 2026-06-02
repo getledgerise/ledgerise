@@ -57,6 +57,10 @@ export class PostgresMappingRepository implements MappingRepository {
           });
   }
 
+  async close(): Promise<void> {
+    await this.pool.end();
+  }
+
   async importChartAccounts(operatorId: string, accounts: NewChartAccount[]): Promise<ChartAccount[]> {
     const client = await this.pool.connect();
     try {

@@ -9,7 +9,8 @@ CROSS JOIN (
     ('1100', 'Aggregator Float', 'asset'),
     ('2000', 'Customer Liability', 'liability'),
     ('4000', 'Bill Payment Revenue', 'revenue'),
-    ('5000', 'Processing Fees', 'expense')
+    ('5000', 'Processing Fees', 'expense'),
+    ('9999', 'Suspense', 'liability')
 ) AS account(code, name, type)
 WHERE operators.slug = 'local-operator'
 ON CONFLICT (operator_id, code) DO UPDATE SET

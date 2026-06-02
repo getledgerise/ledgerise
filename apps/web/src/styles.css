@@ -448,6 +448,31 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .chip.suspense  { background: var(--color-suspense-bg);  color: var(--color-suspense);  }
 .chip-stack { display: flex; flex-direction: column; gap: 3px; }
 
+.journal-line-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+
+.journal-line-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-2);
+  white-space: nowrap;
+}
+
+.journal-line-chip strong {
+  font-family: var(--mono);
+  color: var(--color-text);
+}
+
+.journal-error {
+  margin: var(--s3) var(--s8) 0;
+}
+
 /* ============================================================
    INLINE TAGS
    ============================================================ */
