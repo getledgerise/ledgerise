@@ -517,6 +517,7 @@ export function App() {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [newApiKeySecret, setNewApiKeySecret] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
   const [rules, setRules] = useState<MappingRule[]>([]);
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
   const [transactionPage, setTransactionPage] = useState<PageInfo>({
@@ -541,6 +542,7 @@ export function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authChecking, setAuthChecking] = useState(Boolean(authToken));
   const [authError, setAuthError] = useState('');
+  const [mustChangePassword, setMustChangePassword] = useState(false);
   const [ruleForm, setRuleForm] = useState<RuleFormState>(emptyRuleForm);
   const [ruleDrawerOpen, setRuleDrawerOpen] = useState(false);
   const [coaForm, setCoaForm] = useState({
@@ -611,7 +613,22 @@ export function App() {
     localStorage.setItem(authTokenStorageKey, response.token);
     setAuthToken(response.token);
     setAuthUser(response.user);
-    setNotice(`Signed in as ${response.user.email}`);
+    if (response.user.status === 'invited') {
+      setMustChangePassword(true);
+    } else {
+      setNotice(`Signed in as ${response.user.email}`);
+    }
+  }
+
+  async function changePassword(newPassword: string) {
+    if (!authUser) return;
+    await apiPatch(`/api/users/${encodeURIComponent(authUser.id)}`, {
+      password: newPassword,
+      status: 'active'
+    });
+    setAuthUser({ ...authUser, status: 'active' });
+    setMustChangePassword(false);
+    setNotice(`Welcome, ${authUser.display_name ?? authUser.email}`);
   }
 
   async function logout() {
@@ -870,6 +887,14 @@ export function App() {
     setNotice(`Updated ${result.record.email}`);
   }
 
+  async function resetUserPassword(user: UserRecord) {
+    const password = generatePassword();
+    await apiPatch(`/api/users/${encodeURIComponent(user.id)}`, { password });
+    setUsers((current) => current.map((item) => (item.id === user.id ? { ...item, has_password: true } : item)));
+    setNewUserPassword(password);
+    setNotice(`Password reset for ${user.email}`);
+  }
+
   async function createApiKey(input: { name: string; scopes: ApiScope[] }) {
     const result = await apiPost<{ record: ApiKeyRecord; secret: string }>('/api/api-keys', input);
     setApiKeys((current) => [result.record, ...current]);
@@ -911,6 +936,10 @@ export function App() {
 
   if (!authToken || !authUser) {
     return <LoginView error={authError} onLogin={login} />;
+  }
+
+  if (mustChangePassword && authUser) {
+    return <ChangePasswordView user={authUser} onChangePassword={changePassword} />;
   }
 
   return (
@@ -1034,9 +1063,12 @@ export function App() {
             createApiKey={createApiKey}
             inviteUser={inviteUser}
             newApiKeySecret={newApiKeySecret}
+            newUserPassword={newUserPassword}
             revokeApiKey={revokeApiKey}
+            resetUserPassword={resetUserPassword}
             setCoaForm={setCoaForm}
             setNewApiKeySecret={setNewApiKeySecret}
+            setNewUserPassword={setNewUserPassword}
             saveCoaAccount={saveCoaAccount}
             saveAdapterConfiguration={saveAdapterConfiguration}
             toggleAdapterConfiguration={toggleAdapterConfiguration}
@@ -1887,6 +1919,80 @@ function RuleEditor(props: {
   );
 }
 
+function ChangePasswordView(props: {
+  user: AuthUser;
+  onChangePassword: (newPassword: string) => Promise<void>;
+}) {
+  const { user, onChangePassword } = props;
+  const [form, setForm] = useState({ password: '', confirm: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (form.password !== form.confirm) {
+      setError('Passwords do not match.');
+      return;
+    }
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    setSubmitting(true);
+    setError('');
+    try {
+      await onChangePassword(form.password);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Failed to update password.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-panel">
+        <div className="auth-brand">
+          <img src="/ledgerise-logo.svg" className="auth-logo" alt="" aria-hidden="true" />
+          <span className="auth-wordmark">Ledgerise</span>
+        </div>
+        <h1 className="auth-heading">Set your password</h1>
+        <p className="auth-change-desc">
+          Welcome, {user.display_name ?? user.email}. Choose a new password to continue — your temporary credential will be replaced.
+        </p>
+        <form className="auth-form" onSubmit={submit}>
+          <div className="form-field">
+            <label>New password</label>
+            <input
+              required
+              autoComplete="new-password"
+              type="password"
+              placeholder="At least 8 characters"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+            />
+          </div>
+          <div className="form-field">
+            <label>Confirm password</label>
+            <input
+              required
+              autoComplete="new-password"
+              type="password"
+              placeholder="Repeat your new password"
+              value={form.confirm}
+              onChange={(e) => setForm({ ...form, confirm: e.target.value })}
+            />
+          </div>
+          {error ? <div className="form-error">{error}</div> : null}
+          <button className="btn btn-primary auth-submit" type="submit" disabled={submitting}>
+            {submitting ? 'Saving…' : 'Set Password & Continue'}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
 function AuthLoading() {
   return (
     <main className="auth-shell">
@@ -1928,36 +2034,36 @@ function LoginView(props: {
     <main className="auth-shell">
       <section className="auth-panel">
         <div className="auth-brand">
-          <img src="/ledgerise-logo.svg" alt="" aria-hidden="true" />
-          <div>
-            <span className="auth-kicker">Ledgerise</span>
-            <h1>Sign in</h1>
-          </div>
+          <img src="/ledgerise-logo.svg" className="auth-logo" alt="" aria-hidden="true" />
+          <span className="auth-wordmark">Ledgerise</span>
         </div>
+        <h1 className="auth-heading">Sign in</h1>
         <form className="auth-form" onSubmit={submitLogin}>
-          <label>
-            Email
+          <div className="form-field">
+            <label>Email address</label>
             <input
               required
               autoComplete="email"
               type="email"
+              placeholder="you@company.com"
               value={form.email}
               onChange={(event) => setForm({ ...form, email: event.target.value })}
             />
-          </label>
-          <label>
-            Password
+          </div>
+          <div className="form-field">
+            <label>Password</label>
             <input
               required
               autoComplete="current-password"
               type="password"
+              placeholder="••••••••"
               value={form.password}
               onChange={(event) => setForm({ ...form, password: event.target.value })}
             />
-          </label>
+          </div>
           {localError || error ? <div className="form-error">{localError || error}</div> : null}
-          <button className="btn btn-primary" type="submit" disabled={submitting}>
-            {submitting ? 'Signing in...' : 'Sign In'}
+          <button className="btn btn-primary auth-submit" type="submit" disabled={submitting}>
+            {submitting ? 'Signing in…' : 'Sign In'}
           </button>
         </form>
       </section>
@@ -1976,9 +2082,12 @@ function SettingsView(props: {
   createApiKey: (input: { name: string; scopes: ApiScope[] }) => Promise<void>;
   inviteUser: (input: { email: string; displayName?: string; role: UserRole; password?: string }) => Promise<void>;
   newApiKeySecret: string;
+  newUserPassword: string;
   revokeApiKey: (apiKey: ApiKeyRecord) => Promise<void>;
+  resetUserPassword: (user: UserRecord) => Promise<void>;
   setCoaForm: (form: { code: string; name: string; type: AccountType }) => void;
   setNewApiKeySecret: (secret: string) => void;
+  setNewUserPassword: (password: string) => void;
   saveCoaAccount: (event: FormEvent) => void;
   saveAdapterConfiguration: (adapter: AdapterRecord, config: unknown) => Promise<void>;
   toggleAdapterConfiguration: (adapter: AdapterRecord, enabled: boolean) => Promise<void>;
@@ -1998,16 +2107,19 @@ function SettingsView(props: {
     createApiKey,
     inviteUser,
     newApiKeySecret,
+    newUserPassword,
     revokeApiKey,
+    resetUserPassword,
     setCoaForm,
     setNewApiKeySecret,
+    setNewUserPassword,
     saveCoaAccount,
     saveAdapterConfiguration,
     toggleAdapterConfiguration,
     updateUser,
     users,
     error,
-    setNotice
+    setNotice: _setNotice
   } = props;
   const [selectedAdapterName, setSelectedAdapterName] = useState<string | null>(null);
 
@@ -2090,8 +2202,11 @@ function SettingsView(props: {
               createApiKey={createApiKey}
               inviteUser={inviteUser}
               newApiKeySecret={newApiKeySecret}
+              newUserPassword={newUserPassword}
+              resetUserPassword={resetUserPassword}
               revokeApiKey={revokeApiKey}
               setNewApiKeySecret={setNewApiKeySecret}
+              setNewUserPassword={setNewUserPassword}
               updateUser={updateUser}
               users={users}
             />
@@ -2109,8 +2224,11 @@ function UsersSettingsPanel(props: {
   createApiKey: (input: { name: string; scopes: ApiScope[] }) => Promise<void>;
   inviteUser: (input: { email: string; displayName?: string; role: UserRole; password?: string }) => Promise<void>;
   newApiKeySecret: string;
+  newUserPassword: string;
+  resetUserPassword: (user: UserRecord) => Promise<void>;
   revokeApiKey: (apiKey: ApiKeyRecord) => Promise<void>;
   setNewApiKeySecret: (secret: string) => void;
+  setNewUserPassword: (password: string) => void;
   updateUser: (user: UserRecord, patch: { role?: UserRole; status?: UserStatus }) => Promise<void>;
   users: UserRecord[];
 }) {
@@ -2119,29 +2237,51 @@ function UsersSettingsPanel(props: {
     createApiKey,
     inviteUser,
     newApiKeySecret,
+    newUserPassword,
+    resetUserPassword,
     revokeApiKey,
     setNewApiKeySecret,
+    setNewUserPassword,
     updateUser,
     users
   } = props;
+
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [editUserOpen, setEditUserOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
   const [apiKeyOpen, setApiKeyOpen] = useState(false);
-  const [inviteForm, setInviteForm] = useState({ email: '', displayName: '', password: '', role: 'finance' as UserRole });
-  const [apiKeyForm, setApiKeyForm] = useState({
-    name: '',
-    scopes: ['posting_batches:create', 'posting_batches:read'] as ApiScope[]
-  });
+  const [inviteForm, setInviteForm] = useState({ email: '', displayName: '', role: 'finance' as UserRole });
+  const [editUserForm, setEditUserForm] = useState({ role: 'finance' as UserRole, status: 'active' as UserStatus });
+  const [apiKeyForm, setApiKeyForm] = useState({ name: '', scopes: ['posting_batches:create', 'posting_batches:read'] as ApiScope[] });
+  const [copiedId, setCopiedId] = useState('');
+
+  function openEditUser(user: UserRecord) {
+    setEditingUser(user);
+    setEditUserForm({ role: user.role, status: user.status });
+    setEditUserOpen(true);
+  }
+
+  async function copyText(text: string, id: string) {
+    await navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(''), 2000);
+  }
 
   async function submitInvite(event: FormEvent) {
     event.preventDefault();
-    await inviteUser({
-      email: inviteForm.email,
-      displayName: inviteForm.displayName || undefined,
-      role: inviteForm.role,
-      password: inviteForm.password || undefined
-    });
-    setInviteForm({ email: '', displayName: '', password: '', role: 'finance' });
+    const password = generatePassword();
+    await inviteUser({ email: inviteForm.email, displayName: inviteForm.displayName || undefined, role: inviteForm.role, password });
+    setNewUserPassword(password);
+    setInviteForm({ email: '', displayName: '', role: 'finance' });
     setInviteOpen(false);
+  }
+
+  async function submitEditUser(event: FormEvent) {
+    event.preventDefault();
+    if (!editingUser) return;
+    await updateUser(editingUser, { role: editUserForm.role, status: editUserForm.status });
+    setEditUserOpen(false);
+    setEditingUser(null);
   }
 
   async function submitApiKey(event: FormEvent) {
@@ -2153,46 +2293,56 @@ function UsersSettingsPanel(props: {
 
   return (
     <div className="settings-panel active">
+      {/* ── Users ── */}
       <div className="settings-panel-head">
         <div>
           <h2>Users</h2>
-          <p className="panel-desc">Manage operator users and machine-to-machine API keys.</p>
+          <p className="panel-desc">Manage team access. A temporary credential is generated for each new user.</p>
         </div>
-        <button className="btn btn-primary btn-sm" type="button" onClick={() => setInviteOpen(true)}>Invite User</button>
+        <button className="btn btn-primary btn-sm" type="button" onClick={() => setInviteOpen(true)}>Add User</button>
       </div>
+
+      {newUserPassword ? (
+        <div className="secret-once">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <strong>New user credential</strong>
+            <p>Share this with the user — they will be prompted to change it on first sign-in.</p>
+            <code>{newUserPassword}</code>
+          </div>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => void copyText(newUserPassword, 'user-pw')}>
+            {copiedId === 'user-pw' ? 'Copied!' : 'Copy'}
+          </button>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => setNewUserPassword('')}>Dismiss</button>
+        </div>
+      ) : null}
 
       <div className="table-card">
         <table className="tbl">
           <thead>
-            <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Credential</th><th>Last Login</th><th>Actions</th></tr>
+            <tr><th>User</th><th>Role</th><th>Status</th><th>Last Login</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {users.length === 0 ? (
-              <tr><td colSpan={7} className="dim">No users found for this operator.</td></tr>
+              <tr><td colSpan={5} className="dim">No users found for this operator.</td></tr>
             ) : users.map((user) => (
               <tr key={user.id}>
-                <td>{user.display_name ?? '-'}</td>
-                <td className="mono">{user.email}</td>
                 <td>
-                  <select
-                    className="inline-select"
-                    value={user.role}
-                    onChange={(event) => void updateUser(user, { role: event.target.value as UserRole })}
-                  >
-                    <option value="admin">Admin</option>
-                    <option value="finance">Finance</option>
-                    <option value="auditor">Auditor</option>
-                  </select>
+                  <div style={{ fontWeight: 500 }}>{user.display_name ?? user.email}</div>
+                  {user.display_name ? <div className="dim" style={{ fontSize: 'var(--text-xs)', marginTop: 1 }}>{user.email}</div> : null}
                 </td>
-                <td><span className={`badge ${user.status === 'disabled' ? 'failed' : 'healthy'}`}>{labelizeText(user.status)}</span></td>
-                <td><span className={`badge ${user.has_password ? 'healthy' : 'queued'}`}>{user.has_password ? 'Password set' : 'No password'}</span></td>
-                <td className="dim">{user.last_login_at ? formatDateTime(user.last_login_at) : '-'}</td>
+                <td><span className={`badge ${user.role}-role`}>{labelizeText(user.role)}</span></td>
                 <td>
-                  {user.status === 'disabled' ? (
-                    <button className="btn-link primary" type="button" onClick={() => void updateUser(user, { status: 'active' })}>Enable</button>
-                  ) : (
-                    <button className="btn-link danger" type="button" onClick={() => void updateUser(user, { status: 'disabled' })}>Disable</button>
-                  )}
+                  <span className={`badge ${user.status === 'disabled' ? 'failed' : user.status === 'invited' ? 'queued' : 'healthy'}`}>
+                    {labelizeText(user.status)}
+                  </span>
+                  {!user.has_password ? <span className="badge queued" style={{ marginLeft: 4, fontSize: 10 }}>No password</span> : null}
+                </td>
+                <td className="dim">{user.last_login_at ? formatDateTime(user.last_login_at) : '—'}</td>
+                <td>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <button className="btn-link primary" type="button" onClick={() => openEditUser(user)}>Edit</button>
+                    <button className="btn-link primary" type="button" onClick={() => void resetUserPassword(user)}>Reset password</button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -2200,22 +2350,33 @@ function UsersSettingsPanel(props: {
         </table>
       </div>
 
+      <div className="role-desc-box">
+        <p><strong>Admin:</strong> Full access to all sections and settings.</p>
+        <p><strong>Finance:</strong> Full access to Transactions, Mapping Rules, and Journal Log. Read-only on Settings.</p>
+        <p><strong>Auditor:</strong> Read-only access to Transactions and Journal Log. No access to Mapping Rules or Settings.</p>
+      </div>
+
+      {/* ── API Keys ── */}
+      <div className="panel-section-divider" />
       <div className="settings-panel-head api-key-head">
         <div>
-          <div className="section-group-label">API Keys</div>
-          <p className="panel-desc">Keys authenticate external file exchange clients. The secret is shown only once.</p>
+          <h3 className="panel-section-title">API Keys</h3>
+          <p className="panel-desc">Machine credentials for external integrations — posting batches or downloading journal exports. Secrets are shown once at creation.</p>
         </div>
         <button className="btn btn-secondary btn-sm" type="button" onClick={() => setApiKeyOpen(true)}>Generate Key</button>
       </div>
 
       {newApiKeySecret ? (
         <div className="secret-once">
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <strong>New API key secret</strong>
-            <p>Store this value now. Ledgerise will only show it once.</p>
+            <p>Store this value now — Ledgerise will only show it once.</p>
             <code>{newApiKeySecret}</code>
           </div>
-          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setNewApiKeySecret('')}>Dismiss</button>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => void copyText(newApiKeySecret, 'api-key')}>
+            {copiedId === 'api-key' ? 'Copied!' : 'Copy'}
+          </button>
+          <button className="btn btn-ghost btn-sm" type="button" onClick={() => setNewApiKeySecret('')}>Dismiss</button>
         </div>
       ) : null}
 
@@ -2230,16 +2391,18 @@ function UsersSettingsPanel(props: {
             ) : apiKeys.map((apiKey) => (
               <tr key={apiKey.id}>
                 <td>{apiKey.name}</td>
-                <td className="mono">{apiKey.key_prefix}...</td>
+                <td className="mono">{apiKey.key_prefix}…</td>
                 <td>
                   <div className="scope-list">
                     {apiKey.scopes.map((scope) => <span className="type-tag" key={scope}>{scope}</span>)}
                   </div>
                 </td>
                 <td><span className={`badge ${apiKey.enabled ? 'healthy' : 'failed'}`}>{apiKey.enabled ? 'Active' : 'Revoked'}</span></td>
-                <td className="dim">{apiKey.last_used_at ? formatDateTime(apiKey.last_used_at) : '-'}</td>
+                <td className="dim">{apiKey.last_used_at ? formatDateTime(apiKey.last_used_at) : '—'}</td>
                 <td>
-                  <button className="btn-link danger" type="button" disabled={!apiKey.enabled} onClick={() => void revokeApiKey(apiKey)}>Revoke</button>
+                  {apiKey.enabled
+                    ? <button className="btn-link danger" type="button" onClick={() => void revokeApiKey(apiKey)}>Revoke</button>
+                    : <span className="dim" style={{ fontSize: 'var(--text-xs)' }}>—</span>}
                 </td>
               </tr>
             ))}
@@ -2247,57 +2410,131 @@ function UsersSettingsPanel(props: {
         </table>
       </div>
 
+      {/* ── Invite user drawer ── */}
       <div className={`drawer-overlay${inviteOpen ? ' open' : ''}`} onClick={() => setInviteOpen(false)} />
       <form className={`drawer${inviteOpen ? ' open' : ''}`} aria-hidden={!inviteOpen} onSubmit={submitInvite}>
         <div className="drawer-header">
-          <div className="drawer-hd"><h2>Invite User</h2><div className="mono-id">Create an operator user record</div></div>
-          <button className="drawer-close" type="button" onClick={() => setInviteOpen(false)} aria-label="Close invite drawer">x</button>
+          <div className="drawer-hd">
+            <h2>Add User</h2>
+            <div className="mono-id">A one-time credential will be generated on save</div>
+          </div>
+          <button className="drawer-close" type="button" onClick={() => setInviteOpen(false)} aria-label="Close drawer">×</button>
         </div>
         <div className="drawer-body">
-          <div className="form-field"><label>Email</label><input required type="email" value={inviteForm.email} onChange={(event) => setInviteForm({ ...inviteForm, email: event.target.value })} /></div>
-          <div className="form-field"><label>Name</label><input value={inviteForm.displayName} onChange={(event) => setInviteForm({ ...inviteForm, displayName: event.target.value })} /></div>
-          <div className="form-field"><label>Initial Password</label><input type="password" minLength={8} value={inviteForm.password} onChange={(event) => setInviteForm({ ...inviteForm, password: event.target.value })} /></div>
+          <div className="form-field">
+            <label>Email <span className="field-req">*</span></label>
+            <input required type="email" placeholder="colleague@example.com" value={inviteForm.email} onChange={(event) => setInviteForm({ ...inviteForm, email: event.target.value })} />
+          </div>
+          <div className="form-field">
+            <label>Display Name</label>
+            <input placeholder="Full name" value={inviteForm.displayName} onChange={(event) => setInviteForm({ ...inviteForm, displayName: event.target.value })} />
+          </div>
+          <div className="form-field">
+            <label>Role <span className="field-req">*</span></label>
+            <select value={inviteForm.role} onChange={(event) => setInviteForm({ ...inviteForm, role: event.target.value as UserRole })}>
+              <option value="finance">Finance — full access except Settings (read-only)</option>
+              <option value="auditor">Auditor — read-only on Transactions and Journal Log</option>
+              <option value="admin">Admin — full access including Settings</option>
+            </select>
+            <div className="hint">Role can be changed later from the Users table.</div>
+          </div>
+          <div className="invite-note">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" width="14" height="14" style={{ flexShrink: 0, marginTop: 1 }}>
+              <circle cx="8" cy="8" r="6" /><path d="M8 7v4" /><circle cx="8" cy="5" r=".5" fill="currentColor" stroke="none" />
+            </svg>
+            A secure password will be generated automatically. You'll see it once after saving — copy and share it with the user.
+          </div>
+        </div>
+        <div className="drawer-footer">
+          <button className="btn btn-ghost" type="button" onClick={() => setInviteOpen(false)}>Cancel</button>
+          <button className="btn btn-primary" type="submit">Add User</button>
+        </div>
+      </form>
+
+      {/* ── Edit user drawer ── */}
+      <div className={`drawer-overlay${editUserOpen ? ' open' : ''}`} onClick={() => setEditUserOpen(false)} />
+      <form className={`drawer${editUserOpen ? ' open' : ''}`} aria-hidden={!editUserOpen} onSubmit={submitEditUser}>
+        <div className="drawer-header">
+          <div className="drawer-hd">
+            <h2>Edit User</h2>
+            <div className="mono-id">{editingUser?.email}</div>
+          </div>
+          <button className="drawer-close" type="button" onClick={() => setEditUserOpen(false)} aria-label="Close drawer">×</button>
+        </div>
+        <div className="drawer-body">
           <div className="form-field">
             <label>Role</label>
-            <select value={inviteForm.role} onChange={(event) => setInviteForm({ ...inviteForm, role: event.target.value as UserRole })}>
+            <select value={editUserForm.role} onChange={(event) => setEditUserForm({ ...editUserForm, role: event.target.value as UserRole })}>
               <option value="finance">Finance</option>
               <option value="auditor">Auditor</option>
               <option value="admin">Admin</option>
             </select>
           </div>
+          <div className="form-field">
+            <label>Status</label>
+            <select value={editUserForm.status} onChange={(event) => setEditUserForm({ ...editUserForm, status: event.target.value as UserStatus })}>
+              <option value="active">Active</option>
+              <option value="invited">Invited</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </div>
         </div>
-        <div className="drawer-footer"><button className="btn btn-ghost" type="button" onClick={() => setInviteOpen(false)}>Cancel</button><button className="btn btn-primary" type="submit">Invite</button></div>
+        <div className="drawer-footer">
+          <button className="btn btn-ghost" type="button" onClick={() => setEditUserOpen(false)}>Cancel</button>
+          <button className="btn btn-primary" type="submit">Save Changes</button>
+        </div>
       </form>
 
+      {/* ── API key drawer ── */}
       <div className={`drawer-overlay${apiKeyOpen ? ' open' : ''}`} onClick={() => setApiKeyOpen(false)} />
       <form className={`drawer${apiKeyOpen ? ' open' : ''}`} aria-hidden={!apiKeyOpen} onSubmit={submitApiKey}>
         <div className="drawer-header">
-          <div className="drawer-hd"><h2>Generate API Key</h2><div className="mono-id">Create a scoped machine credential</div></div>
-          <button className="drawer-close" type="button" onClick={() => setApiKeyOpen(false)} aria-label="Close API key drawer">x</button>
+          <div className="drawer-hd">
+            <h2>Generate API Key</h2>
+            <div className="mono-id">Create a scoped machine credential</div>
+          </div>
+          <button className="drawer-close" type="button" onClick={() => setApiKeyOpen(false)} aria-label="Close drawer">×</button>
         </div>
         <div className="drawer-body">
-          <div className="form-field"><label>Name</label><input required value={apiKeyForm.name} onChange={(event) => setApiKeyForm({ ...apiKeyForm, name: event.target.value })} /></div>
-          <div className="scope-checks">
-            {(['posting_batches:create', 'posting_batches:read', 'posting_artifacts:download'] as ApiScope[]).map((scope) => (
-              <label key={scope}>
-                <input
-                  type="checkbox"
-                  checked={apiKeyForm.scopes.includes(scope)}
-                  onChange={(event) =>
-                    setApiKeyForm((current) => ({
-                      ...current,
-                      scopes: event.target.checked
-                        ? [...current.scopes, scope]
-                        : current.scopes.filter((item) => item !== scope)
-                    }))
-                  }
-                />
-                {scope}
-              </label>
-            ))}
+          <div className="form-field">
+            <label>Key Name <span className="field-req">*</span></label>
+            <input required placeholder="e.g. erp-integration" value={apiKeyForm.name} onChange={(event) => setApiKeyForm({ ...apiKeyForm, name: event.target.value })} />
+            <div className="hint">A descriptive name to identify this key's integration.</div>
+          </div>
+          <div className="form-field">
+            <label>Scopes</label>
+            <div className="scope-checks">
+              {([
+                { scope: 'posting_batches:create' as ApiScope, title: 'Create posting batches', desc: 'Submit journal entry batches for outbound posting.' },
+                { scope: 'posting_batches:read' as ApiScope, title: 'Read posting batches', desc: 'List and inspect batch metadata and status.' },
+                { scope: 'posting_artifacts:download' as ApiScope, title: 'Download artifacts', desc: 'Download generated journal CSV exports.' },
+              ]).map(({ scope, title, desc }) => (
+                <label key={scope} className="scope-check-row">
+                  <input
+                    type="checkbox"
+                    checked={apiKeyForm.scopes.includes(scope)}
+                    onChange={(event) =>
+                      setApiKeyForm((current) => ({
+                        ...current,
+                        scopes: event.target.checked
+                          ? [...current.scopes, scope]
+                          : current.scopes.filter((item) => item !== scope)
+                      }))
+                    }
+                  />
+                  <div className="scope-check-text">
+                    <div className="scope-check-title">{title}</div>
+                    <div className="scope-check-desc">{desc}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
           </div>
         </div>
-        <div className="drawer-footer"><button className="btn btn-ghost" type="button" onClick={() => setApiKeyOpen(false)}>Cancel</button><button className="btn btn-primary" type="submit">Generate</button></div>
+        <div className="drawer-footer">
+          <button className="btn btn-ghost" type="button" onClick={() => setApiKeyOpen(false)}>Cancel</button>
+          <button className="btn btn-primary" type="submit">Generate Key</button>
+        </div>
       </form>
     </div>
   );
@@ -3492,6 +3729,14 @@ function journalTimeline(entry: JournalEntry) {
     }
   ];
 }
+
+function generatePassword(length = 16): string {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$%';
+  const array = new Uint8Array(length);
+  crypto.getRandomValues(array);
+  return Array.from(array, (byte) => chars[byte % chars.length]).join('');
+}
+
 
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequest<T>(path, { method: 'GET' });
