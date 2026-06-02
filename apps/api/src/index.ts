@@ -58,6 +58,14 @@ import { findAdapter, listAdapters } from './adapterRegistry.js';
 
 const port = Number(process.env.API_PORT ?? '3000');
 
+type LogLevel = 'info' | 'warn' | 'error';
+
+function log(level: LogLevel, event: string, fields: Record<string, unknown> = {}): void {
+  process.stdout.write(
+    JSON.stringify({ timestamp: new Date().toISOString(), level, event, ...fields }) + '\n'
+  );
+}
+
 type UserRole = 'admin' | 'finance' | 'auditor';
 type UserStatus = 'invited' | 'active' | 'disabled';
 
@@ -437,7 +445,7 @@ class PostgresAccessStore implements AccessStore {
   }
 }
 
-const { ingestionRepository, mappingRepository, postingRepository, accessStore, defaultOperatorId, repositoryKind } =
+const { ingestionRepository, mappingRepository, postingRepository, accessStore, defaultOperatorId, repositoryKind, pgPool } =
   await createRepositories();
 await bootstrapAdminUser();
 const ingestionService = new IngestionService(ingestionRepository);
@@ -608,7 +616,63 @@ function patchSystemSettings(operatorId: string, patch: Partial<SystemSettings>)
 const userRoles = new Set(['admin', 'finance', 'auditor']);
 const userStatuses = new Set(['invited', 'active', 'disabled']);
 
+const INGEST_RATE_LIMIT = Number(process.env.INGEST_RATE_LIMIT ?? '120');
+const INGEST_RATE_WINDOW_MS = 60_000;
+const ingestRateCounts = new Map<string, { count: number; windowStart: number }>();
+
+function checkIngestRateLimit(remoteAddr: string): boolean {
+  const now = Date.now();
+  const entry = ingestRateCounts.get(remoteAddr);
+  if (!entry || now - entry.windowStart >= INGEST_RATE_WINDOW_MS) {
+    ingestRateCounts.set(remoteAddr, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= INGEST_RATE_LIMIT) return false;
+  entry.count += 1;
+  return true;
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - INGEST_RATE_WINDOW_MS;
+  for (const [key, entry] of ingestRateCounts) {
+    if (entry.windowStart < cutoff) ingestRateCounts.delete(key);
+  }
+}, 60_000).unref();
+
 const server = createServer(async (request, response) => {
+  const requestStart = Date.now();
+  const requestMethod = request.method ?? 'UNKNOWN';
+  const requestPath = new URL(
+    request.url ?? '/',
+    `http://${request.headers.host ?? 'localhost'}`
+  ).pathname;
+
+  response.on('finish', () => {
+    log('info', 'http_request', {
+      method: requestMethod,
+      path: requestPath,
+      status: response.statusCode,
+      duration_ms: Date.now() - requestStart,
+      remote_addr: request.socket.remoteAddress
+    });
+  });
+
+  try {
+    await handleRequest(request, response);
+  } catch (error) {
+    log('error', 'unhandled_request_error', {
+      method: requestMethod,
+      path: requestPath,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
+    if (!response.headersSent) {
+      sendJson(response, 500, { status: 'error', code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' });
+    }
+  }
+});
+
+async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   applyCors(response);
 
   if (request.method === 'OPTIONS') {
@@ -619,12 +683,18 @@ const server = createServer(async (request, response) => {
 
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
 
-  if (request.method === 'GET' && url.pathname === '/healthcheck') {
-    sendJson(response, 200, {
-      status: 'ok',
-      service: 'ledgerise-api',
-      repository: repositoryKind
-    });
+  if (request.method === 'GET' && (url.pathname === '/healthcheck' || url.pathname === '/api/health')) {
+    if (repositoryKind === 'postgres') {
+      try {
+        await dbHealthCheck();
+        sendJson(response, 200, { status: 'ok', service: 'ledgerise-api', repository: repositoryKind, db: 'ok' });
+      } catch {
+        log('error', 'health_db_failed', {});
+        sendJson(response, 503, { status: 'error', service: 'ledgerise-api', repository: repositoryKind, db: 'unavailable' });
+      }
+    } else {
+      sendJson(response, 200, { status: 'ok', service: 'ledgerise-api', repository: repositoryKind });
+    }
     return;
   }
 
@@ -657,6 +727,7 @@ const server = createServer(async (request, response) => {
       !user.passwordHash ||
       !verifyPassword(password, user.passwordHash)
     ) {
+      log('warn', 'auth_login_failed', { operatorId, email });
       sendJson(response, 401, {
         status: 'error',
         code: 'AUTHENTICATION_FAILED',
@@ -666,6 +737,7 @@ const server = createServer(async (request, response) => {
     }
 
     const loggedInUser = (await accessStore.recordLogin({ operatorId, userId: user.id })) ?? user;
+    log('info', 'auth_login', { operatorId, userId: user.id, role: user.role });
     sendJson(response, 200, {
       token: signAuthToken(loggedInUser),
       expires_in_seconds: 8 * 60 * 60,
@@ -704,6 +776,8 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
+    const principal = verifyAuthToken(request);
+    if (principal) log('info', 'auth_logout', { operatorId: principal.operatorId, userId: principal.userId });
     sendJson(response, 200, { status: 'ok' });
     return;
   }
@@ -770,13 +844,25 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  if (isDashboardApiPath(url.pathname) && !(await authorizeDashboardRequest(request, response))) {
-    return;
+  let dashboardPrincipal: AuthPrincipal | null = null;
+  if (isDashboardApiPath(url.pathname)) {
+    dashboardPrincipal = await authorizeDashboardRequest(request, response);
+    if (!dashboardPrincipal) return;
   }
 
   const ingestMatch = /^\/api\/ingest\/([^/]+)$/.exec(url.pathname);
 
   if (request.method === 'POST' && ingestMatch) {
+    const remoteAddr = request.socket.remoteAddress ?? 'unknown';
+    if (!checkIngestRateLimit(remoteAddr)) {
+      log('warn', 'ingest_rate_limit_exceeded', { remoteAddr, path: url.pathname });
+      sendJson(response, 429, {
+        status: 'error',
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: `Ingest rate limit of ${INGEST_RATE_LIMIT} requests/minute exceeded`
+      });
+      return;
+    }
     const adapterName = decodeURIComponent(ingestMatch[1] ?? '');
     const adapter = findAdapter(adapterName);
 
@@ -935,6 +1021,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (adapterConfigMatch && request.method === 'PATCH') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin'])) return;
     const adapterName = decodeURIComponent(adapterConfigMatch[1] ?? '');
     const adapter = findAdapter(adapterName);
     if (!adapter) {
@@ -984,6 +1071,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/users/invitations') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1017,6 +1105,7 @@ const server = createServer(async (request, response) => {
 
   const userMatch = /^\/api\/users\/([^/]+)$/.exec(url.pathname);
   if (userMatch && request.method === 'PATCH') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1062,6 +1151,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/api-keys') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1097,6 +1187,7 @@ const server = createServer(async (request, response) => {
 
   const apiKeyRevokeMatch = /^\/api\/api-keys\/([^/]+)\/revoke$/.exec(url.pathname);
   if (apiKeyRevokeMatch && request.method === 'POST') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin'])) return;
     const apiKey = await accessStore.revokeApiKey({
       operatorId: getOperatorId(request),
       apiKeyId: decodeURIComponent(apiKeyRevokeMatch[1] ?? '')
@@ -1112,6 +1203,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/import/generic-csv') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin', 'finance'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1598,6 +1690,7 @@ const server = createServer(async (request, response) => {
   const journalEntryRetryMatch = /^\/api\/journal-entries\/([^/]+)\/retry$/.exec(url.pathname);
 
   if (request.method === 'POST' && journalEntryRetryMatch) {
+    if (!requireRole(dashboardPrincipal!, response, ['admin', 'finance'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1647,6 +1740,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/coa/import') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin', 'finance'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1676,6 +1770,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === 'POST' && url.pathname === '/api/mapping-rules') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin', 'finance'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1690,6 +1785,7 @@ const server = createServer(async (request, response) => {
 
   const mappingRuleMatch = /^\/api\/mapping-rules\/([^/]+)$/.exec(url.pathname);
   if (request.method === 'PATCH' && mappingRuleMatch) {
+    if (!requireRole(dashboardPrincipal!, response, ['admin', 'finance'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1711,6 +1807,7 @@ const server = createServer(async (request, response) => {
     url.pathname
   );
   if (request.method === 'POST' && mappingRuleStatusMatch) {
+    if (!requireRole(dashboardPrincipal!, response, ['admin', 'finance'])) return;
     const ruleId = decodeURIComponent(mappingRuleStatusMatch[1] ?? '');
     const status = mappingRuleStatusMatch[2] === 'activate' ? 'active' : 'inactive';
     const result = await mappingService.setMappingRuleStatus(getOperatorId(request), ruleId, status);
@@ -1728,6 +1825,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method === 'PATCH' && url.pathname === '/api/system-settings') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin'])) return;
     const body = await readJsonBody(request);
     if (!body.ok) {
       sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
@@ -1768,10 +1866,10 @@ const server = createServer(async (request, response) => {
     code: 'NOT_FOUND',
     message: 'Route not found'
   });
-});
+}
 
 server.listen(port, () => {
-  console.log(`Ledgerise API listening on port ${port} using ${repositoryKind} ingestion storage.`);
+  log('info', 'server_start', { port, repository: repositoryKind });
 });
 
 async function createRepositories(): Promise<{
@@ -1781,6 +1879,7 @@ async function createRepositories(): Promise<{
   accessStore: AccessStore;
   defaultOperatorId: string;
   repositoryKind: 'memory' | 'postgres';
+  pgPool: pg.Pool | null;
 }> {
   if (!process.env.DATABASE_URL) {
     return {
@@ -1789,10 +1888,12 @@ async function createRepositories(): Promise<{
       postingRepository: new InMemoryPostingRepository(),
       accessStore: new InMemoryAccessStore(),
       defaultOperatorId: process.env.DEFAULT_OPERATOR_ID ?? 'local-operator',
-      repositoryKind: 'memory'
+      repositoryKind: 'memory',
+      pgPool: null
     };
   }
 
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
   const ingestionRepository = new PostgresIngestionRepository({
     connectionString: process.env.DATABASE_URL
   });
@@ -1819,8 +1920,19 @@ async function createRepositories(): Promise<{
     postingRepository,
     accessStore,
     defaultOperatorId,
-    repositoryKind: 'postgres'
+    repositoryKind: 'postgres',
+    pgPool: pool
   };
+}
+
+async function dbHealthCheck(): Promise<void> {
+  if (!pgPool) return;
+  const client = await pgPool.connect();
+  try {
+    await client.query('SELECT 1');
+  } finally {
+    client.release();
+  }
 }
 
 async function bootstrapAdminUser(): Promise<void> {
@@ -1965,7 +2077,7 @@ function getOperatorId(request: IncomingMessage): string {
 async function authorizeDashboardRequest(
   request: IncomingMessage,
   response: ServerResponse
-): Promise<boolean> {
+): Promise<AuthPrincipal | null> {
   const principal = verifyAuthToken(request);
   if (!principal) {
     sendJson(response, 401, {
@@ -1973,7 +2085,7 @@ async function authorizeDashboardRequest(
       code: 'AUTHENTICATION_REQUIRED',
       message: 'A valid dashboard session is required'
     });
-    return false;
+    return null;
   }
 
   const user = await accessStore.findUser({
@@ -1987,7 +2099,7 @@ async function authorizeDashboardRequest(
       code: 'AUTHENTICATION_REQUIRED',
       message: 'A valid dashboard session is required'
     });
-    return false;
+    return null;
   }
 
   if (user.status === 'invited') {
@@ -1996,10 +2108,24 @@ async function authorizeDashboardRequest(
       code: 'MUST_CHANGE_PASSWORD',
       message: 'You must set a new password before accessing the dashboard'
     });
-    return false;
+    return null;
   }
 
-  return true;
+  return principal;
+}
+
+function requireRole(
+  principal: AuthPrincipal,
+  response: ServerResponse,
+  allowed: UserRole[]
+): boolean {
+  if (allowed.includes(principal.role)) return true;
+  sendJson(response, 403, {
+    status: 'error',
+    code: 'FORBIDDEN',
+    message: `Your role (${principal.role}) does not have permission for this action`
+  });
+  return false;
 }
 
 function isDashboardApiPath(pathname: string): boolean {
