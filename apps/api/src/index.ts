@@ -894,7 +894,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   const ingestMatch = /^\/api\/ingest\/([^/]+)$/.exec(url.pathname);
 
   if (request.method === 'POST' && ingestMatch) {
-    const remoteAddr = request.socket.remoteAddress ?? 'unknown';
+    const remoteAddr = getClientIp(request);
     if (!checkIngestRateLimit(remoteAddr)) {
       log('warn', 'ingest_rate_limit_exceeded', { remoteAddr, path: url.pathname });
       sendJson(response, 429, {
@@ -2111,6 +2111,11 @@ function applyCors(response: ServerResponse) {
 
 function getHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function getClientIp(request: IncomingMessage): string {
+  const forwarded = getHeader(request.headers['x-forwarded-for']);
+  return forwarded?.split(',')[0]?.trim() ?? request.socket.remoteAddress ?? 'unknown';
 }
 
 function getOperatorId(request: IncomingMessage): string {
