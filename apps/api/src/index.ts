@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
 import pg from 'pg';
@@ -64,6 +64,47 @@ function log(level: LogLevel, event: string, fields: Record<string, unknown> = {
   process.stdout.write(
     JSON.stringify({ timestamp: new Date().toISOString(), level, event, ...fields }) + '\n'
   );
+}
+
+// Adapter credential encryption — AES-256-GCM, application-layer.
+// Set LEDGERISE_CREDENTIALS_KEY to a 32-byte key (64 hex chars or 44 base64 chars).
+// If the env var is absent, config is stored and returned as plaintext (development mode).
+const credentialsKey = ((): Buffer | null => {
+  const raw = process.env.LEDGERISE_CREDENTIALS_KEY;
+  if (!raw) return null;
+  const buf = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64');
+  if (buf.length !== 32) throw new Error('LEDGERISE_CREDENTIALS_KEY must be exactly 32 bytes (64 hex chars or 44 base64url chars)');
+  return buf;
+})();
+
+function encryptConfig(config: unknown): unknown {
+  if (!credentialsKey) return config;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', credentialsKey, iv);
+  const plaintext = Buffer.from(JSON.stringify(config), 'utf8');
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  const encoded = Buffer.concat([iv, ciphertext, authTag]).toString('base64url');
+  return { _enc: 1, d: encoded };
+}
+
+function decryptConfig(config: unknown): unknown {
+  if (!credentialsKey || !isRecord(config) || config._enc !== 1) return config;
+  const encoded = typeof config.d === 'string' ? config.d : null;
+  if (!encoded) return config;
+  try {
+    const buf = Buffer.from(encoded, 'base64url');
+    const iv = buf.subarray(0, 12);
+    const authTag = buf.subarray(buf.length - 16);
+    const ciphertext = buf.subarray(12, buf.length - 16);
+    const decipher = createDecipheriv('aes-256-gcm', credentialsKey, iv);
+    decipher.setAuthTag(authTag);
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    return JSON.parse(plaintext.toString('utf8')) as unknown;
+  } catch {
+    log('error', 'credentials_decrypt_failed', {});
+    return config;
+  }
 }
 
 type UserRole = 'admin' | 'finance' | 'auditor';
@@ -1041,7 +1082,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       operatorId: getOperatorId(request),
       adapterName,
       enabled: typeof payload.enabled === 'boolean' ? payload.enabled : undefined,
-      config
+      config: encryptConfig(config)
     });
 
     if (!saved) {
@@ -1057,7 +1098,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
       record: {
         ...adapter,
         enabled: saved.enabled,
-        config: saved.config
+        config: decryptConfig(saved.config)
       }
     });
     return;
@@ -2005,7 +2046,7 @@ async function listConfiguredAdapters(operatorId: string) {
     return {
       ...adapter,
       enabled: configuration?.enabled ?? true,
-      config: configuration?.config ?? defaultAdapterConfigs[adapter.name] ?? {}
+      config: decryptConfig(configuration?.config ?? defaultAdapterConfigs[adapter.name] ?? {})
     };
   });
 }
@@ -2014,7 +2055,9 @@ async function getAdapterConfiguration(
   operatorId: string,
   adapterName: string
 ): Promise<StoredAdapterConfiguration | null> {
-  return ingestionRepository.findAdapterConfiguration({ operatorId, adapterName });
+  const configuration = await ingestionRepository.findAdapterConfiguration({ operatorId, adapterName });
+  if (!configuration) return null;
+  return { ...configuration, config: decryptConfig(configuration.config) };
 }
 
 async function normalizeInboundPayload(

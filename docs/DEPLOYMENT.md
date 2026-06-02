@@ -25,6 +25,7 @@
 | `DEFAULT_OPERATOR_SLUG` | `local-operator` | Slug used to look up the default operator if `DEFAULT_OPERATOR_ID` is not set |
 | `INGEST_RATE_LIMIT` | `120` | Max ingest requests per minute per source IP |
 | `LEDGERISE_BOOTSTRAP_ADMIN_NAME` | `Ledgerise Admin` | Display name for the bootstrap admin |
+| `LEDGERISE_CREDENTIALS_KEY` | — | 32-byte key for AES-256-GCM encryption of adapter credentials at rest. Provide as 64 hex chars or 44 base64 chars. If absent, credentials are stored as plaintext (development only). **Set this in production.** |
 
 ## Running Locally
 
@@ -69,6 +70,7 @@ npm run dev -w apps/web
 ## Production Checklist
 
 - [ ] Set `AUTH_TOKEN_SECRET` to a strong random value (min 32 bytes, base64 or hex).
+- [ ] Set `LEDGERISE_CREDENTIALS_KEY` to a 32-byte random key: `openssl rand -hex 32`
 - [ ] Set `DATABASE_URL` with SSL parameters: `?sslmode=require` or `?sslmode=verify-full`.
 - [ ] Set `LEDGERISE_BOOTSTRAP_ADMIN_PASSWORD` to a temporary value and rotate it on first login.
 - [ ] Place the API behind a TLS-terminating reverse proxy (nginx, Caddy, AWS ALB).
