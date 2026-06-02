@@ -16,9 +16,11 @@
     "@ledgerise/adapter-outbound-zoho-books": "0.1.0",
     "@ledgerise/core-ingestion": "0.1.0",
     "@ledgerise/core-mapping": "0.1.0",
-    "@ledgerise/core-posting": "0.1.0"
+    "@ledgerise/core-posting": "0.1.0",
+    "pg": "^8.21.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.20.0",
     "tsx": "^4.7.0"
   }
 }

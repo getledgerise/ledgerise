@@ -41,6 +41,9 @@ export interface GenericPollConfig {
   cursor_query_param?: string;
   cursor_response_path?: string;
   next_cursor_record_path?: string;
+  page_query_param?: string;
+  next_page_response_path?: string;
+  max_pages?: number;
   amount_multiplier?: number;
 }
 
@@ -136,35 +139,47 @@ export async function normalize(
   }
 
   try {
-    const response = await getFetcher(input)(buildUrl(input), {
-      method: input.config.method ?? 'GET',
-      headers: input.config.headers ?? {}
-    });
+    const fetcher = getFetcher(input);
+    const rawRecords: unknown[] = [];
+    let latestBody: unknown;
+    let nextPageToken: string | undefined;
+    let pageCount = 0;
 
-    if (!response.ok) {
-      return adapterError(
-        'SOURCE_UNREACHABLE',
-        `Generic poll source returned HTTP ${response.status}`,
-        { url: input.config.url, status: response.status }
-      );
-    }
+    do {
+      const response = await fetcher(buildUrl(input, nextPageToken), {
+        method: input.config.method ?? 'GET',
+        headers: input.config.headers ?? {}
+      });
 
-    const body = await response.json();
-    const rawRecords = getPath(body, input.config.records_path);
+      if (!response.ok) {
+        return adapterError(
+          'SOURCE_UNREACHABLE',
+          `Generic poll source returned HTTP ${response.status}`,
+          { url: input.config.url, status: response.status }
+        );
+      }
 
-    if (!Array.isArray(rawRecords)) {
-      return validationFailed(
-        'Generic poll records_path did not resolve to an array',
-        [
-          {
-            field: 'config.records_path',
-            message: 'records_path must point to an array in the response body',
-            raw_value: rawRecords
-          }
-        ],
-        body
-      );
-    }
+      latestBody = await response.json();
+      const pageRecords = getPath(latestBody, input.config.records_path);
+
+      if (!Array.isArray(pageRecords)) {
+        return validationFailed(
+          'Generic poll records_path did not resolve to an array',
+          [
+            {
+              field: 'config.records_path',
+              message: 'records_path must point to an array in the response body',
+              raw_value: pageRecords
+            }
+          ],
+          latestBody
+        );
+      }
+
+      rawRecords.push(...pageRecords);
+      pageCount += 1;
+      nextPageToken = readNextPageToken(latestBody, input.config);
+    } while (nextPageToken && pageCount < (input.config.max_pages ?? 10));
 
     const records: CanonicalTransaction[] = [];
     const rowErrors: AdapterRowError[] = [];
@@ -198,11 +213,11 @@ export async function normalize(
             field: `record.${rowError.row}.${error.field}`
           }))
         ),
-        body
+        latestBody
       );
     }
 
-    return ok(records, buildCursor(body, rawRecords, input), rowErrors);
+    return ok(records, buildCursor(latestBody, rawRecords, input), rowErrors);
   } catch (error) {
     return adapterError(
       'ADAPTER_NORMALIZATION_FAILED',
@@ -220,7 +235,7 @@ export async function healthcheck(): Promise<AdapterHealthcheckResult> {
   };
 }
 
-function buildUrl(input: GenericPollInput): string {
+function buildUrl(input: GenericPollInput, pageToken?: string): string {
   const url = new URL(input.config.url);
   const cursorValue = input.cursor?.last_fetched_at ?? input.cursor?.last_source_id;
 
@@ -228,7 +243,20 @@ function buildUrl(input: GenericPollInput): string {
     url.searchParams.set(input.config.cursor_query_param, String(cursorValue));
   }
 
+  if (input.config.page_query_param && pageToken) {
+    url.searchParams.set(input.config.page_query_param, pageToken);
+  }
+
   return url.toString();
+}
+
+function readNextPageToken(body: unknown, config: GenericPollConfig): string | undefined {
+  if (!config.next_page_response_path || !config.page_query_param) {
+    return undefined;
+  }
+
+  const value = getPath(body, config.next_page_response_path);
+  return typeof value === 'string' && value ? value : undefined;
 }
 
 function buildCanonicalRecord(rawRecord: unknown, config: GenericPollConfig): CanonicalTransaction {

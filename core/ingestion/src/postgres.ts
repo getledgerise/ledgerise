@@ -7,17 +7,24 @@ import {
   type AdapterConfigurationLookup,
   DuplicateSourceTransactionError,
   type DedupeConfidence,
+  type FinishPollRunInput,
   type IngestionErrorListInput,
   type IngestionErrorType,
   type IngestionRepository,
   type ListPage,
+  type NewPollRunInput,
   type NewStoredCanonicalTransaction,
   type NewStoredIngestionError,
+  type PollAdapterLookup,
+  type PollRunListInput,
+  type PollRunStatus,
   type SaveAdapterConfigurationInput,
   type SourceIdentityLookup,
   type StoredAdapterConfiguration,
   type StoredCanonicalTransaction,
   type StoredIngestionError,
+  type StoredPollCursor,
+  type StoredPollRun,
   type TransactionListInput,
   type TransactionIdentityLookup
 } from './index.js';
@@ -65,6 +72,30 @@ interface AdapterConfigurationRow {
   enabled: boolean;
   metadata: Record<string, unknown>;
   updated_at: Date | string;
+}
+
+interface PollCursorRow {
+  operator_id: string;
+  adapter_name: string;
+  cursor: Record<string, unknown>;
+  advanced_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface PollRunRow {
+  id: string;
+  operator_id: string;
+  adapter_name: string;
+  status: PollRunStatus;
+  previous_cursor: Record<string, unknown>;
+  next_cursor: Record<string, unknown> | null;
+  records_fetched: number;
+  accepted_count: number;
+  duplicate_count: number;
+  rejected_count: number;
+  error_message: string | null;
+  started_at: Date | string;
+  finished_at: Date | string | null;
 }
 
 export class PostgresIngestionRepository implements IngestionRepository {
@@ -403,6 +434,209 @@ export class PostgresIngestionRepository implements IngestionRepository {
 
     return result.rows[0] ? toStoredAdapterConfiguration(result.rows[0]) : null;
   }
+
+  async findPollCursor(input: PollAdapterLookup): Promise<StoredPollCursor | null> {
+    const result = await this.pool.query<PollCursorRow>(
+      `
+        SELECT operator_id, adapter_name, cursor, advanced_at, updated_at
+        FROM adapter_poll_cursors
+        WHERE operator_id = $1
+          AND adapter_name = $2
+        LIMIT 1
+      `,
+      [input.operatorId, input.adapterName]
+    );
+
+    return result.rows[0] ? toStoredPollCursor(result.rows[0]) : null;
+  }
+
+  async listPollRuns(input: PollRunListInput): Promise<ListPage<StoredPollRun>> {
+    const { limit, offset } = normalizePagination(input);
+    const values: unknown[] = [input.operatorId, input.adapterName];
+    const clauses = ['operator_id = $1', 'adapter_name = $2'];
+
+    appendFilter(clauses, values, 'status', input.status);
+
+    const whereClause = clauses.join(' AND ');
+    const nextParameterIndex = values.length + 1;
+    const result = await this.pool.query<PollRunRow>(
+      `
+        SELECT
+          id,
+          operator_id,
+          adapter_name,
+          status,
+          previous_cursor,
+          next_cursor,
+          records_fetched,
+          accepted_count,
+          duplicate_count,
+          rejected_count,
+          error_message,
+          started_at,
+          finished_at
+        FROM adapter_poll_runs
+        WHERE ${whereClause}
+        ORDER BY started_at DESC
+        LIMIT $${nextParameterIndex}
+        OFFSET $${nextParameterIndex + 1}
+      `,
+      [...values, limit, offset]
+    );
+
+    const countResult = await this.pool.query<CountRow>(
+      `
+        SELECT COUNT(*)::text AS total
+        FROM adapter_poll_runs
+        WHERE ${whereClause}
+      `,
+      values
+    );
+
+    return {
+      records: result.rows.map(toStoredPollRun),
+      page: {
+        limit,
+        offset,
+        total: Number(countResult.rows[0]?.total ?? 0)
+      }
+    };
+  }
+
+  async createPollRun(input: NewPollRunInput): Promise<StoredPollRun> {
+    const result = await this.pool.query<PollRunRow>(
+      `
+        INSERT INTO adapter_poll_runs (
+          operator_id,
+          adapter_name,
+          status,
+          previous_cursor,
+          started_at
+        )
+        VALUES ($1, $2, 'running', $3, COALESCE($4::timestamptz, now()))
+        RETURNING
+          id,
+          operator_id,
+          adapter_name,
+          status,
+          previous_cursor,
+          next_cursor,
+          records_fetched,
+          accepted_count,
+          duplicate_count,
+          rejected_count,
+          error_message,
+          started_at,
+          finished_at
+      `,
+      [
+        input.operatorId,
+        input.adapterName,
+        JSON.stringify(input.previousCursor ?? {}),
+        input.startedAt ?? null
+      ]
+    );
+
+    const row = result.rows[0];
+
+    if (!row) {
+      throw new Error('Failed to create poll run');
+    }
+
+    return toStoredPollRun(row);
+  }
+
+  async finishPollRun(input: FinishPollRunInput): Promise<StoredPollRun> {
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      if (input.status === 'succeeded' && input.advanceCursor && input.nextCursor) {
+        await client.query(
+          `
+            INSERT INTO adapter_poll_cursors (
+              operator_id,
+              adapter_name,
+              cursor,
+              advanced_at,
+              updated_at
+            )
+            VALUES ($1, $2, $3, COALESCE($4::timestamptz, now()), COALESCE($4::timestamptz, now()))
+            ON CONFLICT (operator_id, adapter_name) DO UPDATE SET
+              cursor = EXCLUDED.cursor,
+              advanced_at = EXCLUDED.advanced_at,
+              updated_at = EXCLUDED.updated_at
+          `,
+          [
+            input.operatorId,
+            input.adapterName,
+            JSON.stringify(input.nextCursor),
+            input.finishedAt ?? null
+          ]
+        );
+      }
+
+      const result = await client.query<PollRunRow>(
+        `
+          UPDATE adapter_poll_runs
+          SET
+            status = $4,
+            next_cursor = $5,
+            records_fetched = $6,
+            accepted_count = $7,
+            duplicate_count = $8,
+            rejected_count = $9,
+            error_message = $10,
+            finished_at = COALESCE($11::timestamptz, now())
+          WHERE operator_id = $1
+            AND adapter_name = $2
+            AND id = $3
+          RETURNING
+            id,
+            operator_id,
+            adapter_name,
+            status,
+            previous_cursor,
+            next_cursor,
+            records_fetched,
+            accepted_count,
+            duplicate_count,
+            rejected_count,
+            error_message,
+            started_at,
+            finished_at
+        `,
+        [
+          input.operatorId,
+          input.adapterName,
+          input.runId,
+          input.status,
+          input.nextCursor ? JSON.stringify(input.nextCursor) : null,
+          input.recordsFetched,
+          input.acceptedCount,
+          input.duplicateCount,
+          input.rejectedCount,
+          input.errorMessage ?? null,
+          input.finishedAt ?? null
+        ]
+      );
+
+      const row = result.rows[0];
+
+      if (!row) {
+        throw new Error(`Poll run ${input.runId} was not found`);
+      }
+
+      await client.query('COMMIT');
+      return toStoredPollRun(row);
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 async function findExistingBySourceIdentity(
@@ -479,6 +713,34 @@ function toStoredAdapterConfiguration(row: AdapterConfigurationRow): StoredAdapt
     config: metadata.config ?? {},
     metadata,
     updatedAt: toIsoString(row.updated_at)
+  };
+}
+
+function toStoredPollCursor(row: PollCursorRow): StoredPollCursor {
+  return {
+    operatorId: row.operator_id,
+    adapterName: row.adapter_name,
+    cursor: row.cursor,
+    advancedAt: toIsoString(row.advanced_at),
+    updatedAt: toIsoString(row.updated_at)
+  };
+}
+
+function toStoredPollRun(row: PollRunRow): StoredPollRun {
+  return {
+    id: row.id,
+    operatorId: row.operator_id,
+    adapterName: row.adapter_name,
+    status: row.status,
+    previousCursor: row.previous_cursor,
+    nextCursor: row.next_cursor ?? undefined,
+    recordsFetched: row.records_fetched,
+    acceptedCount: row.accepted_count,
+    duplicateCount: row.duplicate_count,
+    rejectedCount: row.rejected_count,
+    errorMessage: row.error_message ?? undefined,
+    startedAt: toIsoString(row.started_at),
+    finishedAt: row.finished_at ? toIsoString(row.finished_at) : undefined
   };
 }
 

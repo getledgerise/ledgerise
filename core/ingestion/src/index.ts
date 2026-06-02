@@ -8,6 +8,7 @@ export type DedupeConfidence = 'high' | 'low';
 export type IngestionStatus = 'accepted' | 'duplicate' | 'rejected';
 export type IngestionErrorType = 'schema_validation' | 'adapter_mismatch' | 'duplicate_source';
 export type PostingStatus = 'unposted';
+export type PollRunStatus = 'running' | 'succeeded' | 'failed';
 
 export interface ListPage<T> {
   records: T[];
@@ -74,6 +75,30 @@ export interface StoredAdapterConfiguration {
   updatedAt: string;
 }
 
+export interface StoredPollCursor {
+  operatorId: string;
+  adapterName: string;
+  cursor: Record<string, unknown>;
+  advancedAt: string;
+  updatedAt: string;
+}
+
+export interface StoredPollRun {
+  id: string;
+  operatorId: string;
+  adapterName: string;
+  status: PollRunStatus;
+  previousCursor: Record<string, unknown>;
+  nextCursor?: Record<string, unknown>;
+  recordsFetched: number;
+  acceptedCount: number;
+  duplicateCount: number;
+  rejectedCount: number;
+  errorMessage?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
 export interface IngestionRepository {
   findBySourceIdentity(input: SourceIdentityLookup): Promise<StoredCanonicalTransaction | null>;
   findTransactionById(input: TransactionIdentityLookup): Promise<StoredCanonicalTransaction | null>;
@@ -82,6 +107,10 @@ export interface IngestionRepository {
   listAdapterConfigurations(operatorId: string): Promise<StoredAdapterConfiguration[]>;
   findAdapterConfiguration(input: AdapterConfigurationLookup): Promise<StoredAdapterConfiguration | null>;
   saveAdapterConfiguration(input: SaveAdapterConfigurationInput): Promise<StoredAdapterConfiguration | null>;
+  findPollCursor(input: PollAdapterLookup): Promise<StoredPollCursor | null>;
+  listPollRuns(input: PollRunListInput): Promise<ListPage<StoredPollRun>>;
+  createPollRun(input: NewPollRunInput): Promise<StoredPollRun>;
+  finishPollRun(input: FinishPollRunInput): Promise<StoredPollRun>;
   saveTransaction(input: NewStoredCanonicalTransaction): Promise<StoredCanonicalTransaction>;
   saveIngestionError(input: NewStoredIngestionError): Promise<StoredIngestionError>;
 }
@@ -116,9 +145,35 @@ export interface AdapterConfigurationLookup extends OperatorScopedLookup {
   adapterName: string;
 }
 
+export interface PollAdapterLookup extends OperatorScopedLookup {
+  adapterName: string;
+}
+
+export interface PollRunListInput extends PollAdapterLookup, PaginationInput {
+  status?: PollRunStatus;
+}
+
 export interface SaveAdapterConfigurationInput extends AdapterConfigurationLookup {
   enabled?: boolean;
   config: unknown;
+}
+
+export interface NewPollRunInput extends PollAdapterLookup {
+  previousCursor?: Record<string, unknown>;
+  startedAt?: string;
+}
+
+export interface FinishPollRunInput extends PollAdapterLookup {
+  runId: string;
+  status: Exclude<PollRunStatus, 'running'>;
+  nextCursor?: Record<string, unknown>;
+  advanceCursor?: boolean;
+  recordsFetched: number;
+  acceptedCount: number;
+  duplicateCount: number;
+  rejectedCount: number;
+  errorMessage?: string;
+  finishedAt?: string;
 }
 
 export interface NewStoredCanonicalTransaction {
@@ -282,6 +337,8 @@ export class InMemoryIngestionRepository implements IngestionRepository {
   readonly transactions: StoredCanonicalTransaction[] = [];
   readonly ingestionErrors: StoredIngestionError[] = [];
   readonly adapterConfigurations = new Map<string, StoredAdapterConfiguration>();
+  readonly pollCursors = new Map<string, StoredPollCursor>();
+  readonly pollRuns: StoredPollRun[] = [];
 
   async findBySourceIdentity(
     input: SourceIdentityLookup
@@ -424,6 +481,83 @@ export class InMemoryIngestionRepository implements IngestionRepository {
 
     this.adapterConfigurations.set(key, configuration);
     return configuration;
+  }
+
+  async findPollCursor(input: PollAdapterLookup): Promise<StoredPollCursor | null> {
+    return this.pollCursors.get(adapterConfigurationKey(input.operatorId, input.adapterName)) ?? null;
+  }
+
+  async listPollRuns(input: PollRunListInput): Promise<ListPage<StoredPollRun>> {
+    const { limit, offset } = normalizePagination(input);
+    const filtered = this.pollRuns
+      .filter((run) => run.operatorId === input.operatorId)
+      .filter((run) => run.adapterName === input.adapterName)
+      .filter((run) => !input.status || run.status === input.status)
+      .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+
+    return {
+      records: filtered.slice(offset, offset + limit),
+      page: {
+        limit,
+        offset,
+        total: filtered.length
+      }
+    };
+  }
+
+  async createPollRun(input: NewPollRunInput): Promise<StoredPollRun> {
+    const startedAt = input.startedAt ?? new Date().toISOString();
+    const run: StoredPollRun = {
+      id: `poll_run_${this.pollRuns.length + 1}`,
+      operatorId: input.operatorId,
+      adapterName: input.adapterName,
+      status: 'running',
+      previousCursor: input.previousCursor ?? {},
+      recordsFetched: 0,
+      acceptedCount: 0,
+      duplicateCount: 0,
+      rejectedCount: 0,
+      startedAt
+    };
+
+    this.pollRuns.push(run);
+    return run;
+  }
+
+  async finishPollRun(input: FinishPollRunInput): Promise<StoredPollRun> {
+    const run = this.pollRuns.find(
+      (pollRun) =>
+        pollRun.id === input.runId &&
+        pollRun.operatorId === input.operatorId &&
+        pollRun.adapterName === input.adapterName
+    );
+
+    if (!run) {
+      throw new Error(`Poll run ${input.runId} was not found`);
+    }
+
+    const finishedAt = input.finishedAt ?? new Date().toISOString();
+    run.status = input.status;
+    run.nextCursor = input.nextCursor;
+    run.recordsFetched = input.recordsFetched;
+    run.acceptedCount = input.acceptedCount;
+    run.duplicateCount = input.duplicateCount;
+    run.rejectedCount = input.rejectedCount;
+    run.errorMessage = input.errorMessage;
+    run.finishedAt = finishedAt;
+
+    if (input.status === 'succeeded' && input.advanceCursor && input.nextCursor) {
+      const key = adapterConfigurationKey(input.operatorId, input.adapterName);
+      this.pollCursors.set(key, {
+        operatorId: input.operatorId,
+        adapterName: input.adapterName,
+        cursor: input.nextCursor,
+        advancedAt: finishedAt,
+        updatedAt: finishedAt
+      });
+    }
+
+    return run;
   }
 }
 

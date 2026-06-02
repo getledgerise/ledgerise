@@ -43,7 +43,7 @@ Ledgerise is a configurable automation layer that translates settled payment tra
 Before contributing, please read:
 
 - [README.md](README.md) for the project overview
-- [ADAPTER_SPEC.md](ADAPTER_SPEC.md) for the adapter interface contract
+- [ADAPTER_SPEC.md](docs/ADAPTER_SPEC.md) for the adapter interface contract
 - [docs/SCHEMA_REFERENCE.md](docs/SCHEMA_REFERENCE.md) for the canonical transaction schema
 
 Understanding these three documents will give you the context you need for almost any contribution.
@@ -169,8 +169,8 @@ ledgerise/
 ├── schemas/
 │   └── transaction.schema.json
 ├── docs/
+│   ├── ADAPTER_SPEC.md
 │   └── SCHEMA_REFERENCE.md
-├── ADAPTER_SPEC.md
 ├── CONTRIBUTING.md
 └── README.md
 ```
@@ -185,7 +185,7 @@ Adapters are the most common and most valuable type of contribution. This sectio
 
 ### 7.1 Read the adapter spec first
 
-The [ADAPTER_SPEC.md](ADAPTER_SPEC.md) is the authoritative reference for what every adapter must implement. Read it completely before writing any code. The spec defines the four required methods, the output envelope format, the normalize method rules, and the testing requirements.
+The [ADAPTER_SPEC.md](docs/ADAPTER_SPEC.md) is the authoritative reference for what every adapter must implement. Read it completely before writing any code. The spec defines the four required methods, the output envelope format, the normalize method rules, and the testing requirements.
 
 ### 7.2 Naming convention
 
@@ -220,7 +220,7 @@ adapters/inbound/your-adapter-name/
 
 ### 7.4 The four required methods
 
-Your adapter must implement `meta()`, `validate()`, `normalize()`, and `healthcheck()`. See [ADAPTER_SPEC.md](ADAPTER_SPEC.md) Section 3.3 for the full contract for each method.
+Your adapter must implement `meta()`, `validate()`, `normalize()`, and `healthcheck()`. See [ADAPTER_SPEC.md](docs/ADAPTER_SPEC.md) Section 3.3 for the full contract for each method.
 
 A minimal adapter skeleton:
 

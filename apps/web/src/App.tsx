@@ -128,6 +128,80 @@ interface AdapterRecord {
   config?: unknown;
 }
 
+interface PollCursorRecord {
+  adapter_name: string;
+  cursor: Record<string, unknown>;
+  advanced_at: string;
+  updated_at: string;
+}
+
+interface PollRunRecord {
+  id: string;
+  adapter_name: string;
+  status: 'running' | 'succeeded' | 'failed';
+  previous_cursor: Record<string, unknown>;
+  next_cursor?: Record<string, unknown>;
+  records_fetched: number;
+  accepted_count: number;
+  duplicate_count: number;
+  rejected_count: number;
+  error_message?: string;
+  started_at: string;
+  finished_at?: string;
+}
+
+interface PollStatusRecord {
+  adapter_name: string;
+  cursor: PollCursorRecord | null;
+  runs: PollRunRecord[];
+  page: PageInfo;
+}
+
+type UserRole = 'admin' | 'finance' | 'auditor';
+type UserStatus = 'invited' | 'active' | 'disabled';
+
+interface AuthUser {
+  id: string;
+  email: string;
+  display_name?: string;
+  role: UserRole;
+  status: UserStatus;
+}
+
+interface AuthResponse {
+  token: string;
+  expires_in_seconds: number;
+  user: AuthUser;
+}
+
+interface UserRecord {
+  id: string;
+  email: string;
+  display_name?: string;
+  role: UserRole;
+  status: UserStatus;
+  has_password?: boolean;
+  invited_at?: string;
+  last_login_at?: string;
+}
+
+type ApiScope =
+  | 'posting_batches:create'
+  | 'posting_batches:read'
+  | 'posting_artifacts:download';
+
+interface ApiKeyRecord {
+  id: string;
+  name: string;
+  key_prefix: string;
+  scopes: ApiScope[];
+  enabled: boolean;
+  expires_at?: string;
+  last_used_at?: string;
+  revoked_at?: string;
+  created_at: string;
+}
+
 interface AdapterMappingRow {
   sourcePath: string;
   canonicalField: string;
@@ -181,6 +255,7 @@ interface RuleFormState {
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
+const authTokenStorageKey = 'ledgerise.authToken';
 const transactionPageSize = 100;
 const canonicalFieldOptions = [
   'source_id',
@@ -268,10 +343,13 @@ const adapterConfigTemplates: Record<string, AdapterConfigTemplate> = {
       {
         title: 'Source API',
         fields: [
-          { label: 'Endpoint URL', type: 'text', value: 'https://api.example.com/transactions', hint: 'Ledgerise fetches this URL on the configured schedule.' },
+          { label: 'Endpoint URL', type: 'text', value: 'https://api.example.com/transactions', hint: 'Ledgerise fetches this URL on the configured schedule.', key: 'url' },
           { label: 'Auth Header', type: 'text', value: 'Authorization', hint: 'Header used for API authentication.' },
           { label: 'API Token', type: 'password', hint: 'Stored securely and redacted from logs.' },
-          { label: 'Records Path', type: 'text', value: 'data.transactions', hint: 'JSON path containing source records.' }
+          { label: 'Records Path', type: 'text', value: 'data.transactions', hint: 'JSON path containing source records.', key: 'records_path' },
+          { label: 'Next Page Path', type: 'text', value: 'data.next_page_token', hint: 'Optional JSON path containing the next page token.', key: 'next_page_response_path' },
+          { label: 'Page Query Param', type: 'text', value: 'page_token', hint: 'Optional query parameter used to request the next page.', key: 'page_query_param' },
+          { label: 'Max Pages Per Run', type: 'number', value: '10', hint: 'Safety cap for paginated source responses.', key: 'max_pages' }
         ]
       },
       {
@@ -284,12 +362,12 @@ const adapterConfigTemplates: Record<string, AdapterConfigTemplate> = {
             value: 'Every 15 minutes',
             hint: 'How often Ledgerise fetches new records.'
           },
-          { label: 'Cursor Field', type: 'text', value: 'updated_at', hint: 'Field used to advance the next poll cursor after successful ingestion.' }
+          { label: 'Sync Position Field', type: 'text', value: 'updated_at', hint: 'Field used to remember where the next successful poll should resume.', key: 'next_cursor_record_path' }
         ]
       },
       {
         title: 'Field Mapping',
-        desc: 'Map each API result object to canonical fields. The cursor only advances after these records validate.',
+        desc: 'Map each API result object to canonical fields. The saved sync position only advances after these records validate.',
         fields: [
           {
             type: 'mapping',
@@ -435,6 +513,10 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('coa');
   const [accounts, setAccounts] = useState<ChartAccount[]>([]);
   const [adapters, setAdapters] = useState<AdapterRecord[]>([]);
+  const [pollStatuses, setPollStatuses] = useState<Record<string, PollStatusRecord>>({});
+  const [users, setUsers] = useState<UserRecord[]>([]);
+  const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
+  const [newApiKeySecret, setNewApiKeySecret] = useState('');
   const [rules, setRules] = useState<MappingRule[]>([]);
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
   const [transactionPage, setTransactionPage] = useState<PageInfo>({
@@ -455,6 +537,10 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem(authTokenStorageKey) ?? '');
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authChecking, setAuthChecking] = useState(Boolean(authToken));
+  const [authError, setAuthError] = useState('');
   const [ruleForm, setRuleForm] = useState<RuleFormState>(emptyRuleForm);
   const [ruleDrawerOpen, setRuleDrawerOpen] = useState(false);
   const [coaForm, setCoaForm] = useState({
@@ -465,8 +551,37 @@ export function App() {
   const transactionImportInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
+    if (!authToken) {
+      setAuthChecking(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAuthChecking(true);
+    apiGet<{ user: AuthUser }>('/api/auth/me')
+      .then((response) => {
+        if (cancelled) return;
+        setAuthUser(response.user);
+        setAuthError('');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        clearAuthSession();
+        setAuthError('Your session has expired. Sign in again.');
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecking(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken]);
+
+  useEffect(() => {
+    if (!authToken || authChecking || !authUser) return;
     void refreshOperationalData();
-  }, [journalFilter, transactionOffset]);
+  }, [authToken, authChecking, authUser, journalFilter, transactionOffset]);
 
   const activeRules = rules.filter((rule) => rule.status === 'active');
   const inactiveRules = rules.filter((rule) => rule.status === 'inactive');
@@ -476,6 +591,38 @@ export function App() {
     () => ruleForm.creditSplits.reduce((sum, split) => sum + Number(split.percentageBps || 0), 0),
     [ruleForm.creditSplits]
   );
+
+  function clearAuthSession() {
+    localStorage.removeItem(authTokenStorageKey);
+    setAuthToken('');
+    setAuthUser(null);
+    setAccounts([]);
+    setAdapters([]);
+    setRules([]);
+    setTransactions([]);
+    setJournalEntries([]);
+    setUsers([]);
+    setApiKeys([]);
+  }
+
+  async function login(input: { email: string; password: string }) {
+    setAuthError('');
+    const response = await apiPost<AuthResponse>('/api/auth/login', input);
+    localStorage.setItem(authTokenStorageKey, response.token);
+    setAuthToken(response.token);
+    setAuthUser(response.user);
+    setNotice(`Signed in as ${response.user.email}`);
+  }
+
+  async function logout() {
+    try {
+      await apiPost('/api/auth/logout', {});
+    } catch {
+      // Local token removal is enough for this stateless session.
+    }
+    clearAuthSession();
+    setNotice('');
+  }
 
   async function refreshOperationalData() {
     setLoading(true);
@@ -487,19 +634,34 @@ export function App() {
           ? '/api/journal-entries'
           : `/api/journal-entries?posting_status=${journalFilter}`;
       const transactionPath = `/api/transactions?limit=${transactionPageSize}&offset=${transactionOffset}`;
-      const [coaResponse, adapterResponse, rulesResponse, transactionResponse, journalResponse] = await Promise.all([
+      const [
+        coaResponse,
+        adapterResponse,
+        rulesResponse,
+        transactionResponse,
+        journalResponse,
+        pollStatusResponse,
+        usersResponse,
+        apiKeysResponse
+      ] = await Promise.all([
         apiGet<{ records: ChartAccount[] }>('/api/coa'),
         apiGet<{ records: AdapterRecord[] }>('/api/adapters'),
         apiGet<{ records: MappingRule[] }>('/api/mapping-rules'),
         apiGet<{ records: TransactionRecord[]; page: PageInfo }>(transactionPath),
-        apiGet<{ records: JournalEntry[] }>(journalPath)
+        apiGet<{ records: JournalEntry[] }>(journalPath),
+        apiGet<PollStatusRecord>('/api/adapters/generic-poll/poll-status?limit=3').catch(() => null),
+        apiGet<{ records: UserRecord[] }>('/api/users').catch(() => ({ records: [] })),
+        apiGet<{ records: ApiKeyRecord[] }>('/api/api-keys').catch(() => ({ records: [] }))
       ]);
       setAccounts(coaResponse.records);
       setAdapters(adapterResponse.records);
+      setPollStatuses(pollStatusResponse ? { [pollStatusResponse.adapter_name]: pollStatusResponse } : {});
       setRules(rulesResponse.records);
       setTransactions(transactionResponse.records);
       setTransactionPage(transactionResponse.page);
       setJournalEntries(journalResponse.records);
+      setUsers(usersResponse.records);
+      setApiKeys(apiKeysResponse.records);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Failed to load Ledgerise data');
     } finally {
@@ -691,6 +853,39 @@ export function App() {
     setNotice(`${adapter.name} ${enabled ? 'enabled' : 'disabled'}`);
   }
 
+  async function inviteUser(input: { email: string; displayName?: string; role: UserRole; password?: string }) {
+    const result = await apiPost<{ record: UserRecord }>('/api/users/invitations', {
+      email: input.email,
+      display_name: input.displayName,
+      role: input.role,
+      password: input.password
+    });
+    setUsers((current) => [result.record, ...current.filter((user) => user.id !== result.record.id)]);
+    setNotice(`Invited ${result.record.email}`);
+  }
+
+  async function updateUser(user: UserRecord, patch: { role?: UserRole; status?: UserStatus }) {
+    const result = await apiPatch<{ record: UserRecord }>(`/api/users/${encodeURIComponent(user.id)}`, patch);
+    setUsers((current) => current.map((item) => (item.id === result.record.id ? result.record : item)));
+    setNotice(`Updated ${result.record.email}`);
+  }
+
+  async function createApiKey(input: { name: string; scopes: ApiScope[] }) {
+    const result = await apiPost<{ record: ApiKeyRecord; secret: string }>('/api/api-keys', input);
+    setApiKeys((current) => [result.record, ...current]);
+    setNewApiKeySecret(result.secret);
+    setNotice(`Created API key ${result.record.name}`);
+  }
+
+  async function revokeApiKey(apiKey: ApiKeyRecord) {
+    const result = await apiPost<{ record: ApiKeyRecord }>(
+      `/api/api-keys/${encodeURIComponent(apiKey.id)}/revoke`,
+      {}
+    );
+    setApiKeys((current) => current.map((item) => (item.id === result.record.id ? result.record : item)));
+    setNotice(`Revoked API key ${result.record.name}`);
+  }
+
   function mapTransaction(transaction: TransactionRecord) {
     setRuleForm({
       ...emptyRuleForm,
@@ -710,8 +905,29 @@ export function App() {
     setScreen('journal-log');
   }
 
+  if (authChecking) {
+    return <AuthLoading />;
+  }
+
+  if (!authToken || !authUser) {
+    return <LoginView error={authError} onLogin={login} />;
+  }
+
   return (
-    <div className="layout">
+    <>
+      <aside className="mobile-notice" aria-labelledby="mobile-notice-title">
+        <img src="/ledgerise-logo.svg" alt="" aria-hidden="true" />
+        <div>
+          <p className="mobile-notice-kicker">Desktop workspace</p>
+          <h1 id="mobile-notice-title">Open Ledgerise on a wider screen</h1>
+          <p>
+            This dashboard is optimized for desktop tables, drawers, and finance workflows. Reload it on a laptop or
+            desktop browser for the intended experience.
+          </p>
+        </div>
+      </aside>
+
+      <div className="layout">
       <nav className="topnav">
         <div className="topnav-logo">
           <div className="logo-mark">
@@ -734,6 +950,10 @@ export function App() {
           <NavButton active={screen === 'settings'} onClick={() => setScreen('settings')}>
             Settings
           </NavButton>
+        </div>
+        <div className="topnav-user">
+          <span>{authUser.email}</span>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => void logout()}>Sign Out</button>
         </div>
       </nav>
 
@@ -806,19 +1026,29 @@ export function App() {
           <SettingsView
             settingsTab={settingsTab}
             setSettingsTab={setSettingsTab}
+            apiKeys={apiKeys}
             accounts={accounts}
             adapters={adapters}
+            pollStatuses={pollStatuses}
             coaForm={coaForm}
+            createApiKey={createApiKey}
+            inviteUser={inviteUser}
+            newApiKeySecret={newApiKeySecret}
+            revokeApiKey={revokeApiKey}
             setCoaForm={setCoaForm}
+            setNewApiKeySecret={setNewApiKeySecret}
             saveCoaAccount={saveCoaAccount}
             saveAdapterConfiguration={saveAdapterConfiguration}
             toggleAdapterConfiguration={toggleAdapterConfiguration}
+            updateUser={updateUser}
+            users={users}
             error={error}
             setNotice={setNotice}
           />
         ) : null}
       </main>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -1657,30 +1887,127 @@ function RuleEditor(props: {
   );
 }
 
+function AuthLoading() {
+  return (
+    <main className="auth-shell">
+      <div className="auth-panel compact">
+        <img src="/ledgerise-logo.svg" alt="" aria-hidden="true" />
+        <div>
+          <h1>Restoring session</h1>
+          <p>Checking your Ledgerise access.</p>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function LoginView(props: {
+  error: string;
+  onLogin: (input: { email: string; password: string }) => Promise<void>;
+}) {
+  const { error, onLogin } = props;
+  const [form, setForm] = useState({ email: '', password: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [localError, setLocalError] = useState('');
+
+  async function submitLogin(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setLocalError('');
+
+    try {
+      await onLogin(form);
+    } catch (caught) {
+      setLocalError(caught instanceof Error ? caught.message : 'Unable to sign in');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-panel">
+        <div className="auth-brand">
+          <img src="/ledgerise-logo.svg" alt="" aria-hidden="true" />
+          <div>
+            <span className="auth-kicker">Ledgerise</span>
+            <h1>Sign in</h1>
+          </div>
+        </div>
+        <form className="auth-form" onSubmit={submitLogin}>
+          <label>
+            Email
+            <input
+              required
+              autoComplete="email"
+              type="email"
+              value={form.email}
+              onChange={(event) => setForm({ ...form, email: event.target.value })}
+            />
+          </label>
+          <label>
+            Password
+            <input
+              required
+              autoComplete="current-password"
+              type="password"
+              value={form.password}
+              onChange={(event) => setForm({ ...form, password: event.target.value })}
+            />
+          </label>
+          {localError || error ? <div className="form-error">{localError || error}</div> : null}
+          <button className="btn btn-primary" type="submit" disabled={submitting}>
+            {submitting ? 'Signing in...' : 'Sign In'}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
 function SettingsView(props: {
   settingsTab: SettingsTab;
   setSettingsTab: (tab: SettingsTab) => void;
+  apiKeys: ApiKeyRecord[];
   accounts: ChartAccount[];
   adapters: AdapterRecord[];
+  pollStatuses: Record<string, PollStatusRecord>;
   coaForm: { code: string; name: string; type: AccountType };
+  createApiKey: (input: { name: string; scopes: ApiScope[] }) => Promise<void>;
+  inviteUser: (input: { email: string; displayName?: string; role: UserRole; password?: string }) => Promise<void>;
+  newApiKeySecret: string;
+  revokeApiKey: (apiKey: ApiKeyRecord) => Promise<void>;
   setCoaForm: (form: { code: string; name: string; type: AccountType }) => void;
+  setNewApiKeySecret: (secret: string) => void;
   saveCoaAccount: (event: FormEvent) => void;
   saveAdapterConfiguration: (adapter: AdapterRecord, config: unknown) => Promise<void>;
   toggleAdapterConfiguration: (adapter: AdapterRecord, enabled: boolean) => Promise<void>;
+  updateUser: (user: UserRecord, patch: { role?: UserRole; status?: UserStatus }) => Promise<void>;
+  users: UserRecord[];
   error: string;
   setNotice: (notice: string) => void;
 }) {
   const {
     settingsTab,
     setSettingsTab,
+    apiKeys,
     accounts,
     adapters,
+    pollStatuses,
     coaForm,
+    createApiKey,
+    inviteUser,
+    newApiKeySecret,
+    revokeApiKey,
     setCoaForm,
+    setNewApiKeySecret,
     saveCoaAccount,
     saveAdapterConfiguration,
     toggleAdapterConfiguration,
-    error
+    updateUser,
+    users,
+    error,
+    setNotice
   } = props;
   const [selectedAdapterName, setSelectedAdapterName] = useState<string | null>(null);
 
@@ -1747,6 +2074,7 @@ function SettingsView(props: {
           ) : settingsTab === 'adapters' ? (
             <AdapterSettingsPanel
               adapters={adapters}
+              pollStatuses={pollStatuses}
               onCloseDrawer={() => setSelectedAdapterName(null)}
               onConfigure={(adapter) => setSelectedAdapterName(adapter.name)}
               onSave={async (adapter, config) => {
@@ -1756,24 +2084,243 @@ function SettingsView(props: {
               onToggleAdapter={(adapter, enabled) => void toggleAdapterConfiguration(adapter, enabled)}
               selectedAdapter={selectedAdapter}
             />
-          ) : (
-            <Placeholder title={labelizeTab(settingsTab)} subtitle="This settings panel will be wired in its corresponding phase." embedded />
-          )}
+          ) : settingsTab === 'users' ? (
+            <UsersSettingsPanel
+              apiKeys={apiKeys}
+              createApiKey={createApiKey}
+              inviteUser={inviteUser}
+              newApiKeySecret={newApiKeySecret}
+              revokeApiKey={revokeApiKey}
+              setNewApiKeySecret={setNewApiKeySecret}
+              updateUser={updateUser}
+              users={users}
+            />
+          ) : settingsTab === 'system' ? (
+            <Placeholder title="System" subtitle="Runtime settings are environment-controlled for now; dashboard editing will be added when persistence exists." embedded />
+          ) : null}
         </div>
       </div>
     </section>
   );
 }
 
+function UsersSettingsPanel(props: {
+  apiKeys: ApiKeyRecord[];
+  createApiKey: (input: { name: string; scopes: ApiScope[] }) => Promise<void>;
+  inviteUser: (input: { email: string; displayName?: string; role: UserRole; password?: string }) => Promise<void>;
+  newApiKeySecret: string;
+  revokeApiKey: (apiKey: ApiKeyRecord) => Promise<void>;
+  setNewApiKeySecret: (secret: string) => void;
+  updateUser: (user: UserRecord, patch: { role?: UserRole; status?: UserStatus }) => Promise<void>;
+  users: UserRecord[];
+}) {
+  const {
+    apiKeys,
+    createApiKey,
+    inviteUser,
+    newApiKeySecret,
+    revokeApiKey,
+    setNewApiKeySecret,
+    updateUser,
+    users
+  } = props;
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [apiKeyOpen, setApiKeyOpen] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ email: '', displayName: '', password: '', role: 'finance' as UserRole });
+  const [apiKeyForm, setApiKeyForm] = useState({
+    name: '',
+    scopes: ['posting_batches:create', 'posting_batches:read'] as ApiScope[]
+  });
+
+  async function submitInvite(event: FormEvent) {
+    event.preventDefault();
+    await inviteUser({
+      email: inviteForm.email,
+      displayName: inviteForm.displayName || undefined,
+      role: inviteForm.role,
+      password: inviteForm.password || undefined
+    });
+    setInviteForm({ email: '', displayName: '', password: '', role: 'finance' });
+    setInviteOpen(false);
+  }
+
+  async function submitApiKey(event: FormEvent) {
+    event.preventDefault();
+    await createApiKey(apiKeyForm);
+    setApiKeyForm({ name: '', scopes: ['posting_batches:create', 'posting_batches:read'] });
+    setApiKeyOpen(false);
+  }
+
+  return (
+    <div className="settings-panel active">
+      <div className="settings-panel-head">
+        <div>
+          <h2>Users</h2>
+          <p className="panel-desc">Manage operator users and machine-to-machine API keys.</p>
+        </div>
+        <button className="btn btn-primary btn-sm" type="button" onClick={() => setInviteOpen(true)}>Invite User</button>
+      </div>
+
+      <div className="table-card">
+        <table className="tbl">
+          <thead>
+            <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Credential</th><th>Last Login</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            {users.length === 0 ? (
+              <tr><td colSpan={7} className="dim">No users found for this operator.</td></tr>
+            ) : users.map((user) => (
+              <tr key={user.id}>
+                <td>{user.display_name ?? '-'}</td>
+                <td className="mono">{user.email}</td>
+                <td>
+                  <select
+                    className="inline-select"
+                    value={user.role}
+                    onChange={(event) => void updateUser(user, { role: event.target.value as UserRole })}
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="finance">Finance</option>
+                    <option value="auditor">Auditor</option>
+                  </select>
+                </td>
+                <td><span className={`badge ${user.status === 'disabled' ? 'failed' : 'healthy'}`}>{labelizeText(user.status)}</span></td>
+                <td><span className={`badge ${user.has_password ? 'healthy' : 'queued'}`}>{user.has_password ? 'Password set' : 'No password'}</span></td>
+                <td className="dim">{user.last_login_at ? formatDateTime(user.last_login_at) : '-'}</td>
+                <td>
+                  {user.status === 'disabled' ? (
+                    <button className="btn-link primary" type="button" onClick={() => void updateUser(user, { status: 'active' })}>Enable</button>
+                  ) : (
+                    <button className="btn-link danger" type="button" onClick={() => void updateUser(user, { status: 'disabled' })}>Disable</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="settings-panel-head api-key-head">
+        <div>
+          <div className="section-group-label">API Keys</div>
+          <p className="panel-desc">Keys authenticate external file exchange clients. The secret is shown only once.</p>
+        </div>
+        <button className="btn btn-secondary btn-sm" type="button" onClick={() => setApiKeyOpen(true)}>Generate Key</button>
+      </div>
+
+      {newApiKeySecret ? (
+        <div className="secret-once">
+          <div>
+            <strong>New API key secret</strong>
+            <p>Store this value now. Ledgerise will only show it once.</p>
+            <code>{newApiKeySecret}</code>
+          </div>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setNewApiKeySecret('')}>Dismiss</button>
+        </div>
+      ) : null}
+
+      <div className="table-card">
+        <table className="tbl">
+          <thead>
+            <tr><th>Name</th><th>Prefix</th><th>Scopes</th><th>Status</th><th>Last Used</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            {apiKeys.length === 0 ? (
+              <tr><td colSpan={6} className="dim">No API keys created yet.</td></tr>
+            ) : apiKeys.map((apiKey) => (
+              <tr key={apiKey.id}>
+                <td>{apiKey.name}</td>
+                <td className="mono">{apiKey.key_prefix}...</td>
+                <td>
+                  <div className="scope-list">
+                    {apiKey.scopes.map((scope) => <span className="type-tag" key={scope}>{scope}</span>)}
+                  </div>
+                </td>
+                <td><span className={`badge ${apiKey.enabled ? 'healthy' : 'failed'}`}>{apiKey.enabled ? 'Active' : 'Revoked'}</span></td>
+                <td className="dim">{apiKey.last_used_at ? formatDateTime(apiKey.last_used_at) : '-'}</td>
+                <td>
+                  <button className="btn-link danger" type="button" disabled={!apiKey.enabled} onClick={() => void revokeApiKey(apiKey)}>Revoke</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className={`drawer-overlay${inviteOpen ? ' open' : ''}`} onClick={() => setInviteOpen(false)} />
+      <form className={`drawer${inviteOpen ? ' open' : ''}`} aria-hidden={!inviteOpen} onSubmit={submitInvite}>
+        <div className="drawer-header">
+          <div className="drawer-hd"><h2>Invite User</h2><div className="mono-id">Create an operator user record</div></div>
+          <button className="drawer-close" type="button" onClick={() => setInviteOpen(false)} aria-label="Close invite drawer">x</button>
+        </div>
+        <div className="drawer-body">
+          <div className="form-field"><label>Email</label><input required type="email" value={inviteForm.email} onChange={(event) => setInviteForm({ ...inviteForm, email: event.target.value })} /></div>
+          <div className="form-field"><label>Name</label><input value={inviteForm.displayName} onChange={(event) => setInviteForm({ ...inviteForm, displayName: event.target.value })} /></div>
+          <div className="form-field"><label>Initial Password</label><input type="password" minLength={8} value={inviteForm.password} onChange={(event) => setInviteForm({ ...inviteForm, password: event.target.value })} /></div>
+          <div className="form-field">
+            <label>Role</label>
+            <select value={inviteForm.role} onChange={(event) => setInviteForm({ ...inviteForm, role: event.target.value as UserRole })}>
+              <option value="finance">Finance</option>
+              <option value="auditor">Auditor</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+        </div>
+        <div className="drawer-footer"><button className="btn btn-ghost" type="button" onClick={() => setInviteOpen(false)}>Cancel</button><button className="btn btn-primary" type="submit">Invite</button></div>
+      </form>
+
+      <div className={`drawer-overlay${apiKeyOpen ? ' open' : ''}`} onClick={() => setApiKeyOpen(false)} />
+      <form className={`drawer${apiKeyOpen ? ' open' : ''}`} aria-hidden={!apiKeyOpen} onSubmit={submitApiKey}>
+        <div className="drawer-header">
+          <div className="drawer-hd"><h2>Generate API Key</h2><div className="mono-id">Create a scoped machine credential</div></div>
+          <button className="drawer-close" type="button" onClick={() => setApiKeyOpen(false)} aria-label="Close API key drawer">x</button>
+        </div>
+        <div className="drawer-body">
+          <div className="form-field"><label>Name</label><input required value={apiKeyForm.name} onChange={(event) => setApiKeyForm({ ...apiKeyForm, name: event.target.value })} /></div>
+          <div className="scope-checks">
+            {(['posting_batches:create', 'posting_batches:read', 'posting_artifacts:download'] as ApiScope[]).map((scope) => (
+              <label key={scope}>
+                <input
+                  type="checkbox"
+                  checked={apiKeyForm.scopes.includes(scope)}
+                  onChange={(event) =>
+                    setApiKeyForm((current) => ({
+                      ...current,
+                      scopes: event.target.checked
+                        ? [...current.scopes, scope]
+                        : current.scopes.filter((item) => item !== scope)
+                    }))
+                  }
+                />
+                {scope}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="drawer-footer"><button className="btn btn-ghost" type="button" onClick={() => setApiKeyOpen(false)}>Cancel</button><button className="btn btn-primary" type="submit">Generate</button></div>
+      </form>
+    </div>
+  );
+}
+
 function AdapterSettingsPanel(props: {
   adapters: AdapterRecord[];
+  pollStatuses: Record<string, PollStatusRecord>;
   selectedAdapter: AdapterRecord | null;
   onConfigure: (adapter: AdapterRecord) => void;
   onCloseDrawer: () => void;
   onSave: (adapter: AdapterRecord, config: unknown) => Promise<void>;
   onToggleAdapter: (adapter: AdapterRecord, enabled: boolean) => void;
 }) {
-  const { adapters, selectedAdapter, onConfigure, onCloseDrawer, onSave, onToggleAdapter } = props;
+  const {
+    adapters,
+    pollStatuses,
+    selectedAdapter,
+    onConfigure,
+    onCloseDrawer,
+    onSave,
+    onToggleAdapter
+  } = props;
   const inboundAdapters = adapters.filter((adapter) => adapter.direction === 'inbound');
   const outboundAdapters = adapters.filter((adapter) => adapter.direction === 'outbound');
 
@@ -1813,7 +2360,12 @@ function AdapterSettingsPanel(props: {
         ))}
       </div>
 
-      <AdapterConfigDrawer adapter={selectedAdapter} onClose={onCloseDrawer} onSave={onSave} />
+      <AdapterConfigDrawer
+        adapter={selectedAdapter}
+        onClose={onCloseDrawer}
+        onSave={onSave}
+        pollStatus={selectedAdapter ? pollStatuses[selectedAdapter.name] : undefined}
+      />
     </div>
   );
 }
@@ -1835,7 +2387,7 @@ function SchemaSettingsPanel() {
   ];
   const modeCards = [
     ['Webhook', 'Source system pushes each event to Ledgerise. Best for payment processors that support reliable event callbacks.', 'generic-webhook'],
-    ['Poll', 'Ledgerise calls the source API on a schedule using a cursor such as last fetched time or source ID.', 'generic-poll'],
+    ['Poll', 'Ledgerise calls the source API on a schedule and remembers the last safely synced time or source ID.', 'generic-poll'],
     ['File Import', 'Operator uploads CSV exports. Useful for onboarding, backfills, banks, and providers without an API.', 'generic-csv'],
     ['Manual Entry', 'Structured one-off entry for exceptions. Stored through the same canonical schema.', 'manual-entry']
   ];
@@ -1991,12 +2543,55 @@ function AdapterCard(props: {
   );
 }
 
+function PollStatusSummary({ status }: { status?: PollStatusRecord }) {
+  const latestRun = status?.runs[0];
+  const cursorValue = readCursorValue(status?.cursor?.cursor);
+
+  return (
+    <div className="adapter-status-panel">
+      <div className="adapter-status-metrics">
+        <div className="adapter-status-cell">
+          <span>Last run</span>
+          <strong>{latestRun ? labelizeText(latestRun.status) : 'No runs yet'}</strong>
+          {latestRun ? <small>{formatDateTime(latestRun.finished_at ?? latestRun.started_at)}</small> : <small>Waiting for first worker run</small>}
+        </div>
+        <div className="adapter-status-cell">
+          <span>Records</span>
+          <strong>{latestRun ? latestRun.records_fetched : '-'}</strong>
+          <small>fetched from source</small>
+        </div>
+        <div className="adapter-status-cell">
+          <span>Ingestion</span>
+          <strong>
+            {latestRun
+              ? `${latestRun.accepted_count}/${latestRun.duplicate_count}/${latestRun.rejected_count}`
+              : '-'}
+          </strong>
+          <small>accepted / duplicate / rejected</small>
+        </div>
+      </div>
+      <div className="adapter-status-cursor">
+        <span>Synced through</span>
+        <strong className="mono">{cursorValue ?? '-'}</strong>
+        {status?.cursor ? <small>{formatDateTime(status.cursor.advanced_at)}</small> : null}
+      </div>
+      {latestRun?.error_message ? (
+        <div className="adapter-status-error">
+          <span>Error</span>
+          <strong>{latestRun.error_message}</strong>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AdapterConfigDrawer(props: {
   adapter: AdapterRecord | null;
   onClose: () => void;
   onSave: (adapter: AdapterRecord, config: unknown) => Promise<void>;
+  pollStatus?: PollStatusRecord;
 }) {
-  const { adapter, onClose, onSave } = props;
+  const { adapter, onClose, onSave, pollStatus } = props;
   const template = adapter ? getAdapterConfigTemplate(adapter) : null;
   const formRef = useRef<HTMLFormElement | null>(null);
 
@@ -2022,6 +2617,12 @@ function AdapterConfigDrawer(props: {
           <button className="drawer-close" type="button" onClick={onClose} aria-label="Close adapter configuration drawer">×</button>
         </div>
         <div className="drawer-body">
+          {adapter?.modes.includes('poll') ? (
+            <div className="drawer-section">
+              <div className="drawer-section-title">Poll Status</div>
+              <PollStatusSummary status={pollStatus} />
+            </div>
+          ) : null}
           {adapter && template ? (
             template.sections.map((section) => (
               <div className="drawer-section" key={section.title}>
@@ -2229,7 +2830,16 @@ function getAdapterConfigTemplate(adapter: AdapterRecord): AdapterConfigTemplate
     sections: template.sections.map((section) => ({
       ...section,
       fields: section.fields.map((field) => {
-        if (field.type !== 'mapping') return field;
+        if (field.type !== 'mapping') {
+          if ('key' in field && field.key && config[field.key] !== undefined) {
+            return {
+              ...field,
+              value: String(config[field.key])
+            };
+          }
+
+          return field;
+        }
 
         if (adapter.name === 'generic-csv' && field.id === 'generic-csv-map') {
           return {
@@ -2242,6 +2852,16 @@ function getAdapterConfigTemplate(adapter: AdapterRecord): AdapterConfigTemplate
         }
 
         if (adapter.name === 'generic-webhook' && field.id === 'generic-webhook-map') {
+          return {
+            ...field,
+            rows: rowsFromMappingConfig(
+              isRecord(config.field_mappings) ? config.field_mappings : undefined,
+              field.rows
+            )
+          };
+        }
+
+        if (adapter.name === 'generic-poll' && field.id === 'generic-poll-map') {
           return {
             ...field,
             rows: rowsFromMappingConfig(
@@ -2286,6 +2906,17 @@ function buildAdapterOperationalConfig(adapter: AdapterRecord, formData: FormDat
     return {
       ...defaultAdapterOperationalConfig(adapter.name),
       field_mappings: mappingRowsToObject(readMappingRows(formData, 'generic-webhook-map'))
+    };
+  }
+
+  if (adapter.name === 'generic-poll') {
+    const fields = readFieldValues(formData);
+    const maxPages = Number(fields.max_pages ?? 10);
+    return {
+      ...defaultAdapterOperationalConfig(adapter.name),
+      ...fields,
+      max_pages: Number.isFinite(maxPages) && maxPages > 0 ? Math.floor(maxPages) : 10,
+      field_mappings: mappingRowsToObject(readMappingRows(formData, 'generic-poll-map'))
     };
   }
 
@@ -2354,6 +2985,37 @@ function defaultAdapterOperationalConfig(adapterName: string): Record<string, un
         raw_service: 'service'
       },
       amount_multiplier: 100
+    };
+  }
+
+  if (adapterName === 'generic-poll') {
+    return {
+      url: 'https://api.example.com/transactions',
+      records_path: 'data.transactions',
+      source_system: 'generic-api',
+      environment: 'live',
+      cursor_query_param: 'since',
+      next_cursor_record_path: 'updated_at',
+      page_query_param: 'page_token',
+      next_page_response_path: 'data.next_page_token',
+      max_pages: 10,
+      field_mappings: {
+        source_id: 'id',
+        occurred_at: 'created_at',
+        settled_at: 'settled_at',
+        amount: 'amount',
+        status: 'status',
+        type: 'type',
+        direction: 'direction',
+        currency: 'currency',
+        channel: 'channel',
+        'principal.id': 'customer_id',
+        'principal.type': 'principal_type',
+        'principal.reference': 'customer_phone',
+        'product.line': 'product_line',
+        'product.biller': 'biller',
+        'product.biller_category': 'biller_category'
+      }
     };
   }
 
@@ -2681,7 +3343,12 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
     return () => window.clearTimeout(timeout);
   }, [onClose]);
 
-  return <div id="toast" className="show">{message}</div>;
+  return (
+    <div id="toast" className="show" role="status" aria-live="polite">
+      <span className="toast-dot" aria-hidden="true" />
+      {message}
+    </div>
+  );
 }
 
 function accountChip(code: string, accounts: ChartAccount[]) {
@@ -2736,6 +3403,11 @@ function formatDateTime(value: string) {
     hour: '2-digit',
     minute: '2-digit'
   }).format(new Date(value));
+}
+
+function readCursorValue(cursor: Record<string, unknown> | undefined): string | undefined {
+  const value = cursor?.last_fetched_at ?? cursor?.last_source_id ?? Object.values(cursor ?? {})[0];
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : undefined;
 }
 
 function formatDate(value: string) {
@@ -2842,10 +3514,22 @@ async function apiPatch<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function apiRequest<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(`${apiBaseUrl}${path}`, init);
+  const headers = new Headers(init.headers);
+  const token = localStorage.getItem(authTokenStorageKey);
+  if (token && !headers.has('authorization')) {
+    headers.set('authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    ...init,
+    headers
+  });
   const payload = await response.json();
 
   if (!response.ok) {
+    if (response.status === 401) {
+      localStorage.removeItem(authTokenStorageKey);
+    }
     const message = Array.isArray(payload.errors)
       ? payload.errors.join(', ')
       : payload.message ?? 'API request failed';

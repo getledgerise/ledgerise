@@ -1,5 +1,7 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+
+import pg from 'pg';
 
 import {
   normalize as normalizeGenericCsv,
@@ -25,6 +27,8 @@ import {
   type StoredAdapterConfiguration,
   type StoredCanonicalTransaction,
   type StoredIngestionError,
+  type StoredPollCursor,
+  type StoredPollRun,
   type TransactionListInput
 } from '@ledgerise/core-ingestion';
 import { PostgresIngestionRepository } from '@ledgerise/core-ingestion/postgres';
@@ -54,8 +58,390 @@ import { findAdapter, listAdapters } from './adapterRegistry.js';
 
 const port = Number(process.env.API_PORT ?? '3000');
 
-const { ingestionRepository, mappingRepository, postingRepository, defaultOperatorId, repositoryKind } =
+type UserRole = 'admin' | 'finance' | 'auditor';
+type UserStatus = 'invited' | 'active' | 'disabled';
+
+interface AccessUser {
+  id: string;
+  operatorId: string;
+  email: string;
+  displayName?: string;
+  role: UserRole;
+  status: UserStatus;
+  invitedAt?: string;
+  lastLoginAt?: string;
+  passwordHash?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ManagedApiKey {
+  id: string;
+  operatorId: string;
+  name: string;
+  keyPrefix: string;
+  scopes: ApiScope[];
+  enabled: boolean;
+  expiresAt?: string;
+  lastUsedAt?: string;
+  revokedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface CreatedApiKey {
+  record: ManagedApiKey;
+  secret: string;
+}
+
+interface AuthPrincipal {
+  userId: string;
+  operatorId: string;
+  email: string;
+  role: UserRole;
+}
+
+interface AccessStore {
+  listUsers(operatorId: string): Promise<AccessUser[]>;
+  findUser(input: { operatorId: string; userId: string }): Promise<AccessUser | null>;
+  findUserByEmail(input: { operatorId: string; email: string }): Promise<AccessUser | null>;
+  inviteUser(input: {
+    operatorId: string;
+    email: string;
+    displayName?: string;
+    role: UserRole;
+    passwordHash?: string;
+  }): Promise<AccessUser>;
+  updateUser(input: {
+    operatorId: string;
+    userId: string;
+    role?: UserRole;
+    status?: UserStatus;
+    passwordHash?: string;
+  }): Promise<AccessUser | null>;
+  recordLogin(input: { operatorId: string; userId: string }): Promise<AccessUser | null>;
+  listApiKeys(operatorId: string): Promise<ManagedApiKey[]>;
+  createApiKey(input: {
+    operatorId: string;
+    name: string;
+    scopes: ApiScope[];
+    expiresAt?: string;
+  }): Promise<CreatedApiKey>;
+  revokeApiKey(input: { operatorId: string; apiKeyId: string }): Promise<ManagedApiKey | null>;
+}
+
+class InMemoryAccessStore implements AccessStore {
+  private readonly users: AccessUser[] = [];
+  private readonly apiKeys: Array<ManagedApiKey & { keyHash: string }> = [];
+
+  async listUsers(operatorId: string): Promise<AccessUser[]> {
+    return this.users
+      .filter((user) => user.operatorId === operatorId)
+      .sort((left, right) => left.email.localeCompare(right.email));
+  }
+
+  async findUser(input: { operatorId: string; userId: string }): Promise<AccessUser | null> {
+    return (
+      this.users.find((user) => user.operatorId === input.operatorId && user.id === input.userId) ??
+      null
+    );
+  }
+
+  async findUserByEmail(input: { operatorId: string; email: string }): Promise<AccessUser | null> {
+    const email = input.email.toLowerCase();
+    return (
+      this.users.find(
+        (user) => user.operatorId === input.operatorId && user.email.toLowerCase() === email
+      ) ?? null
+    );
+  }
+
+  async inviteUser(input: {
+    operatorId: string;
+    email: string;
+    displayName?: string;
+    role: UserRole;
+    passwordHash?: string;
+  }): Promise<AccessUser> {
+    const existing = this.users.find(
+      (user) => user.operatorId === input.operatorId && user.email === input.email
+    );
+    const now = new Date().toISOString();
+
+    if (existing) {
+      existing.displayName = input.displayName ?? existing.displayName;
+      existing.role = input.role;
+      existing.passwordHash = input.passwordHash ?? existing.passwordHash;
+      existing.status = existing.status === 'disabled' ? 'active' : existing.status;
+      existing.updatedAt = now;
+      return existing;
+    }
+
+    const user: AccessUser = {
+      id: `user_${this.users.length + 1}`,
+      operatorId: input.operatorId,
+      email: input.email,
+      displayName: input.displayName,
+      role: input.role,
+      passwordHash: input.passwordHash,
+      status: 'invited',
+      invitedAt: now,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    this.users.push(user);
+    return user;
+  }
+
+  async updateUser(input: {
+    operatorId: string;
+    userId: string;
+    role?: UserRole;
+    status?: UserStatus;
+    passwordHash?: string;
+  }): Promise<AccessUser | null> {
+    const user = this.users.find(
+      (item) => item.operatorId === input.operatorId && item.id === input.userId
+    );
+    if (!user) return null;
+
+    user.role = input.role ?? user.role;
+    user.status = input.status ?? user.status;
+    user.passwordHash = input.passwordHash ?? user.passwordHash;
+    user.updatedAt = new Date().toISOString();
+    return user;
+  }
+
+  async recordLogin(input: { operatorId: string; userId: string }): Promise<AccessUser | null> {
+    const user = await this.findUser(input);
+    if (!user) return null;
+
+    const now = new Date().toISOString();
+    user.status = user.status === 'invited' ? 'active' : user.status;
+    user.lastLoginAt = now;
+    user.updatedAt = now;
+    return user;
+  }
+
+  async listApiKeys(operatorId: string): Promise<ManagedApiKey[]> {
+    return this.apiKeys
+      .filter((apiKey) => apiKey.operatorId === operatorId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .map(({ keyHash: _keyHash, ...apiKey }) => apiKey);
+  }
+
+  async createApiKey(input: {
+    operatorId: string;
+    name: string;
+    scopes: ApiScope[];
+    expiresAt?: string;
+  }): Promise<CreatedApiKey> {
+    const secret = createApiKeySecret();
+    const now = new Date().toISOString();
+    const record: ManagedApiKey & { keyHash: string } = {
+      id: `api_key_${this.apiKeys.length + 1}`,
+      operatorId: input.operatorId,
+      name: input.name,
+      keyPrefix: secret.slice(0, 16),
+      keyHash: sha256(secret),
+      scopes: input.scopes,
+      enabled: true,
+      expiresAt: input.expiresAt,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.apiKeys.push(record);
+    const { keyHash: _keyHash, ...safeRecord } = record;
+    return { record: safeRecord, secret };
+  }
+
+  async revokeApiKey(input: { operatorId: string; apiKeyId: string }): Promise<ManagedApiKey | null> {
+    const apiKey = this.apiKeys.find(
+      (item) => item.operatorId === input.operatorId && item.id === input.apiKeyId
+    );
+    if (!apiKey) return null;
+
+    const now = new Date().toISOString();
+    apiKey.enabled = false;
+    apiKey.revokedAt = now;
+    apiKey.updatedAt = now;
+    const { keyHash: _keyHash, ...safeRecord } = apiKey;
+    return safeRecord;
+  }
+}
+
+class PostgresAccessStore implements AccessStore {
+  private readonly pool: pg.Pool;
+
+  constructor(options: { connectionString: string; max?: number }) {
+    this.pool = new pg.Pool({
+      connectionString: options.connectionString,
+      max: options.max ?? 10
+    });
+  }
+
+  async listUsers(operatorId: string): Promise<AccessUser[]> {
+    const result = await this.pool.query<AccessUserRow>(
+      `
+        SELECT id, operator_id, email, display_name, role, status, invited_at, last_login_at, password_hash, created_at, updated_at
+        FROM users
+        WHERE operator_id = $1
+        ORDER BY email ASC
+      `,
+      [operatorId]
+    );
+    return result.rows.map(toAccessUser);
+  }
+
+  async findUser(input: { operatorId: string; userId: string }): Promise<AccessUser | null> {
+    const result = await this.pool.query<AccessUserRow>(
+      `
+        SELECT id, operator_id, email, display_name, role, status, invited_at, last_login_at, password_hash, created_at, updated_at
+        FROM users
+        WHERE operator_id = $1 AND id = $2
+        LIMIT 1
+      `,
+      [input.operatorId, input.userId]
+    );
+    return result.rows[0] ? toAccessUser(result.rows[0]) : null;
+  }
+
+  async findUserByEmail(input: { operatorId: string; email: string }): Promise<AccessUser | null> {
+    const result = await this.pool.query<AccessUserRow>(
+      `
+        SELECT id, operator_id, email, display_name, role, status, invited_at, last_login_at, password_hash, created_at, updated_at
+        FROM users
+        WHERE operator_id = $1 AND lower(email) = lower($2)
+        LIMIT 1
+      `,
+      [input.operatorId, input.email]
+    );
+    return result.rows[0] ? toAccessUser(result.rows[0]) : null;
+  }
+
+  async inviteUser(input: {
+    operatorId: string;
+    email: string;
+    displayName?: string;
+    role: UserRole;
+    passwordHash?: string;
+  }): Promise<AccessUser> {
+    const result = await this.pool.query<AccessUserRow>(
+      `
+        INSERT INTO users (operator_id, email, display_name, role, status, invited_at, password_hash)
+        VALUES ($1, $2, $3, $4, 'invited', now(), $5)
+        ON CONFLICT (operator_id, email) DO UPDATE SET
+          display_name = COALESCE(EXCLUDED.display_name, users.display_name),
+          role = EXCLUDED.role,
+          password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
+          status = CASE WHEN users.status = 'disabled' THEN 'active' ELSE users.status END,
+          updated_at = now()
+        RETURNING id, operator_id, email, display_name, role, status, invited_at, last_login_at, password_hash, created_at, updated_at
+      `,
+      [input.operatorId, input.email, input.displayName ?? null, input.role, input.passwordHash ?? null]
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error('Failed to invite user');
+    return toAccessUser(row);
+  }
+
+  async updateUser(input: {
+    operatorId: string;
+    userId: string;
+    role?: UserRole;
+    status?: UserStatus;
+    passwordHash?: string;
+  }): Promise<AccessUser | null> {
+    const result = await this.pool.query<AccessUserRow>(
+      `
+        UPDATE users
+        SET
+          role = COALESCE($3, role),
+          status = COALESCE($4, status),
+          password_hash = COALESCE($5, password_hash),
+          updated_at = now()
+        WHERE operator_id = $1 AND id = $2
+        RETURNING id, operator_id, email, display_name, role, status, invited_at, last_login_at, password_hash, created_at, updated_at
+      `,
+      [input.operatorId, input.userId, input.role ?? null, input.status ?? null, input.passwordHash ?? null]
+    );
+    return result.rows[0] ? toAccessUser(result.rows[0]) : null;
+  }
+
+  async recordLogin(input: { operatorId: string; userId: string }): Promise<AccessUser | null> {
+    const result = await this.pool.query<AccessUserRow>(
+      `
+        UPDATE users
+        SET
+          status = CASE WHEN status = 'invited' THEN 'active' ELSE status END,
+          last_login_at = now(),
+          updated_at = now()
+        WHERE operator_id = $1 AND id = $2
+        RETURNING id, operator_id, email, display_name, role, status, invited_at, last_login_at, password_hash, created_at, updated_at
+      `,
+      [input.operatorId, input.userId]
+    );
+    return result.rows[0] ? toAccessUser(result.rows[0]) : null;
+  }
+
+  async listApiKeys(operatorId: string): Promise<ManagedApiKey[]> {
+    const result = await this.pool.query<ApiKeyManagementRow>(
+      `
+        SELECT id, operator_id, name, key_prefix, scopes, enabled, expires_at, last_used_at, revoked_at, created_at, updated_at
+        FROM api_keys
+        WHERE operator_id = $1
+        ORDER BY created_at DESC
+      `,
+      [operatorId]
+    );
+    return result.rows.map(toManagedApiKey);
+  }
+
+  async createApiKey(input: {
+    operatorId: string;
+    name: string;
+    scopes: ApiScope[];
+    expiresAt?: string;
+  }): Promise<CreatedApiKey> {
+    const secret = createApiKeySecret();
+    const result = await this.pool.query<ApiKeyManagementRow>(
+      `
+        INSERT INTO api_keys (operator_id, name, key_prefix, key_hash, scopes, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, operator_id, name, key_prefix, scopes, enabled, expires_at, last_used_at, revoked_at, created_at, updated_at
+      `,
+      [
+        input.operatorId,
+        input.name,
+        secret.slice(0, 16),
+        sha256(secret),
+        input.scopes,
+        input.expiresAt ?? null
+      ]
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error('Failed to create API key');
+    return { record: toManagedApiKey(row), secret };
+  }
+
+  async revokeApiKey(input: { operatorId: string; apiKeyId: string }): Promise<ManagedApiKey | null> {
+    const result = await this.pool.query<ApiKeyManagementRow>(
+      `
+        UPDATE api_keys
+        SET enabled = false, revoked_at = now(), updated_at = now()
+        WHERE operator_id = $1 AND id = $2
+        RETURNING id, operator_id, name, key_prefix, scopes, enabled, expires_at, last_used_at, revoked_at, created_at, updated_at
+      `,
+      [input.operatorId, input.apiKeyId]
+    );
+    return result.rows[0] ? toManagedApiKey(result.rows[0]) : null;
+  }
+}
+
+const { ingestionRepository, mappingRepository, postingRepository, accessStore, defaultOperatorId, repositoryKind } =
   await createRepositories();
+await bootstrapAdminUser();
 const ingestionService = new IngestionService(ingestionRepository);
 const mappingService = new MappingService(mappingRepository);
 const postingService = new PostingService(postingRepository);
@@ -123,11 +509,30 @@ const defaultAdapterConfigs: Record<string, unknown> = {
   'generic-poll': {
     source_system: 'generic-api',
     environment: 'live',
-    endpoint_url: 'https://api.example.com/transactions',
-    auth_header: 'Authorization',
+    url: 'https://api.example.com/transactions',
     records_path: 'data.transactions',
-    poll_interval: 'Every 15 minutes',
-    cursor_field: 'updated_at'
+    cursor_query_param: 'since',
+    next_cursor_record_path: 'updated_at',
+    page_query_param: 'page_token',
+    next_page_response_path: 'data.next_page_token',
+    max_pages: 10,
+    field_mappings: {
+      source_id: 'id',
+      occurred_at: 'created_at',
+      settled_at: 'settled_at',
+      amount: 'amount',
+      status: 'status',
+      type: 'type',
+      direction: 'direction',
+      currency: 'currency',
+      channel: 'channel',
+      'principal.id': 'customer_id',
+      'principal.type': 'principal_type',
+      'principal.reference': 'customer_phone',
+      'product.line': 'product_line',
+      'product.biller': 'biller',
+      'product.biller_category': 'biller_category'
+    }
   },
   'generic-journal-csv': {
     file_name_pattern: 'ledgerise-journals-{batch_id}.csv',
@@ -144,6 +549,37 @@ const defaultAdapterConfigs: Record<string, unknown> = {
     account_map_env: 'ZOHO_ACCOUNT_MAP_JSON'
   }
 };
+
+interface AccessUserRow {
+  id: string;
+  operator_id: string;
+  email: string;
+  display_name: string | null;
+  role: UserRole;
+  status: UserStatus;
+  invited_at: Date | string | null;
+  last_login_at: Date | string | null;
+  password_hash: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface ApiKeyManagementRow {
+  id: string;
+  operator_id: string;
+  name: string;
+  key_prefix: string;
+  scopes: string[];
+  enabled: boolean;
+  expires_at: Date | string | null;
+  last_used_at: Date | string | null;
+  revoked_at: Date | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+const userRoles = new Set(['admin', 'finance', 'auditor']);
+const userStatuses = new Set(['invited', 'active', 'disabled']);
 
 const server = createServer(async (request, response) => {
   applyCors(response);
@@ -162,6 +598,90 @@ const server = createServer(async (request, response) => {
       service: 'ledgerise-api',
       repository: repositoryKind
     });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/auth/login') {
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
+      return;
+    }
+
+    const payload = isRecord(body.value) ? body.value : {};
+    const email = readString(payload, 'email');
+    const password = readString(payload, 'password');
+
+    if (!email || !password) {
+      sendJson(response, 400, {
+        status: 'error',
+        code: 'INVALID_LOGIN',
+        message: 'Body must include email and password'
+      });
+      return;
+    }
+
+    const operatorId = getOperatorId(request);
+    const user = await accessStore.findUserByEmail({ operatorId, email });
+
+    if (
+      !user ||
+      user.status === 'disabled' ||
+      !user.passwordHash ||
+      !verifyPassword(password, user.passwordHash)
+    ) {
+      sendJson(response, 401, {
+        status: 'error',
+        code: 'AUTHENTICATION_FAILED',
+        message: 'Email or password is incorrect'
+      });
+      return;
+    }
+
+    const loggedInUser = (await accessStore.recordLogin({ operatorId, userId: user.id })) ?? user;
+    sendJson(response, 200, {
+      token: signAuthToken(loggedInUser),
+      expires_in_seconds: 8 * 60 * 60,
+      user: toUserResponse(loggedInUser)
+    });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/auth/me') {
+    const principal = verifyAuthToken(request);
+    if (!principal) {
+      sendJson(response, 401, {
+        status: 'error',
+        code: 'AUTHENTICATION_REQUIRED',
+        message: 'A valid bearer token is required'
+      });
+      return;
+    }
+
+    const user = await accessStore.findUser({
+      operatorId: principal.operatorId,
+      userId: principal.userId
+    });
+
+    if (!user || user.status === 'disabled') {
+      sendJson(response, 401, {
+        status: 'error',
+        code: 'AUTHENTICATION_REQUIRED',
+        message: 'A valid bearer token is required'
+      });
+      return;
+    }
+
+    sendJson(response, 200, { user: toUserResponse(user) });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
+    sendJson(response, 200, { status: 'ok' });
+    return;
+  }
+
+  if (isDashboardApiPath(url.pathname) && !(await authorizeDashboardRequest(request, response))) {
     return;
   }
 
@@ -258,6 +778,53 @@ const server = createServer(async (request, response) => {
   }
 
   const adapterConfigMatch = /^\/api\/adapters\/([^/]+)\/config$/.exec(url.pathname);
+  const adapterPollStatusMatch = /^\/api\/adapters\/([^/]+)\/poll-status$/.exec(url.pathname);
+
+  if (adapterPollStatusMatch && request.method === 'GET') {
+    const adapterName = decodeURIComponent(adapterPollStatusMatch[1] ?? '');
+    const adapter = findAdapter(adapterName);
+
+    if (!adapter) {
+      sendJson(response, 404, {
+        status: 'error',
+        code: 'ADAPTER_NOT_FOUND',
+        message: 'Adapter not found'
+      });
+      return;
+    }
+
+    if (adapter.direction !== 'inbound' || !adapter.modes.includes('poll')) {
+      sendJson(response, 400, {
+        status: 'error',
+        code: 'ADAPTER_NOT_POLLABLE',
+        message: `Adapter "${adapterName}" does not expose poll status`
+      });
+      return;
+    }
+
+    const operatorId = getOperatorId(request);
+    const pagination = parsePagination(url);
+
+    if (!pagination.ok) {
+      sendJson(response, 400, pagination.error);
+      return;
+    }
+
+    const cursor = await ingestionRepository.findPollCursor({ operatorId, adapterName });
+    const runs = await ingestionRepository.listPollRuns({
+      operatorId,
+      adapterName,
+      ...pagination.value
+    });
+
+    sendJson(response, 200, {
+      adapter_name: adapterName,
+      cursor: cursor ? toPollCursorResponse(cursor) : null,
+      runs: runs.records.map(toPollRunResponse),
+      page: runs.page
+    });
+    return;
+  }
 
   if (adapterConfigMatch && request.method === 'GET') {
     const adapterName = decodeURIComponent(adapterConfigMatch[1] ?? '');
@@ -317,6 +884,141 @@ const server = createServer(async (request, response) => {
         config: saved.config
       }
     });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/users') {
+    sendJson(response, 200, {
+      records: (await accessStore.listUsers(getOperatorId(request))).map(toUserResponse)
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/users/invitations') {
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
+      return;
+    }
+
+    const payload = isRecord(body.value) ? body.value : {};
+    const email = readString(payload, 'email');
+    const role = readUserRole(payload.role);
+    const password = readString(payload, 'password') ?? readString(payload, 'initial_password');
+
+    if (!email || !role) {
+      sendJson(response, 400, {
+        status: 'error',
+        code: 'INVALID_USER_INVITE',
+        message: 'Body must include email and a supported role'
+      });
+      return;
+    }
+
+    const user = await accessStore.inviteUser({
+      operatorId: getOperatorId(request),
+      email,
+      displayName: readString(payload, 'display_name') ?? readString(payload, 'name'),
+      role,
+      passwordHash: password ? hashPassword(password) : undefined
+    });
+    sendJson(response, 201, { record: toUserResponse(user) });
+    return;
+  }
+
+  const userMatch = /^\/api\/users\/([^/]+)$/.exec(url.pathname);
+  if (userMatch && request.method === 'PATCH') {
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
+      return;
+    }
+
+    const payload = isRecord(body.value) ? body.value : {};
+    const role = payload.role === undefined ? undefined : readUserRole(payload.role);
+    const status = payload.status === undefined ? undefined : readUserStatus(payload.status);
+    const password = readString(payload, 'password') ?? readString(payload, 'new_password');
+
+    if ((payload.role !== undefined && !role) || (payload.status !== undefined && !status)) {
+      sendJson(response, 400, {
+        status: 'error',
+        code: 'INVALID_USER_UPDATE',
+        message: 'Body includes an unsupported role or status'
+      });
+      return;
+    }
+
+    const user = await accessStore.updateUser({
+      operatorId: getOperatorId(request),
+      userId: decodeURIComponent(userMatch[1] ?? ''),
+      role,
+      status,
+      passwordHash: password ? hashPassword(password) : undefined
+    });
+
+    if (!user) {
+      sendJson(response, 404, { status: 'error', code: 'USER_NOT_FOUND', message: 'User not found' });
+      return;
+    }
+
+    sendJson(response, 200, { record: toUserResponse(user) });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/api-keys') {
+    sendJson(response, 200, {
+      records: (await accessStore.listApiKeys(getOperatorId(request))).map(toApiKeyResponse)
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/api-keys') {
+    const body = await readJsonBody(request);
+    if (!body.ok) {
+      sendJson(response, 400, { status: 'error', code: 'MALFORMED_JSON', message: body.message });
+      return;
+    }
+
+    const payload = isRecord(body.value) ? body.value : {};
+    const name = readString(payload, 'name');
+    const scopes = readApiScopes(payload.scopes);
+    const expiresAt = readString(payload, 'expires_at');
+
+    if (!name || scopes.length === 0 || (expiresAt && Number.isNaN(Date.parse(expiresAt)))) {
+      sendJson(response, 400, {
+        status: 'error',
+        code: 'INVALID_API_KEY',
+        message: 'Body must include name, at least one supported scope, and optional ISO expires_at'
+      });
+      return;
+    }
+
+    const created = await accessStore.createApiKey({
+      operatorId: getOperatorId(request),
+      name,
+      scopes,
+      expiresAt
+    });
+    sendJson(response, 201, {
+      record: toApiKeyResponse(created.record),
+      secret: created.secret
+    });
+    return;
+  }
+
+  const apiKeyRevokeMatch = /^\/api\/api-keys\/([^/]+)\/revoke$/.exec(url.pathname);
+  if (apiKeyRevokeMatch && request.method === 'POST') {
+    const apiKey = await accessStore.revokeApiKey({
+      operatorId: getOperatorId(request),
+      apiKeyId: decodeURIComponent(apiKeyRevokeMatch[1] ?? '')
+    });
+
+    if (!apiKey) {
+      sendJson(response, 404, { status: 'error', code: 'API_KEY_NOT_FOUND', message: 'API key not found' });
+      return;
+    }
+
+    sendJson(response, 200, { record: toApiKeyResponse(apiKey) });
     return;
   }
 
@@ -946,6 +1648,7 @@ async function createRepositories(): Promise<{
   ingestionRepository: IngestionRepository;
   mappingRepository: MappingRepository;
   postingRepository: PostingRepository;
+  accessStore: AccessStore;
   defaultOperatorId: string;
   repositoryKind: 'memory' | 'postgres';
 }> {
@@ -954,6 +1657,7 @@ async function createRepositories(): Promise<{
       ingestionRepository: new InMemoryIngestionRepository(),
       mappingRepository: new InMemoryMappingRepository(),
       postingRepository: new InMemoryPostingRepository(),
+      accessStore: new InMemoryAccessStore(),
       defaultOperatorId: process.env.DEFAULT_OPERATOR_ID ?? 'local-operator',
       repositoryKind: 'memory'
     };
@@ -968,6 +1672,7 @@ async function createRepositories(): Promise<{
   const postingRepository = new PostgresPostingRepository({
     connectionString: process.env.DATABASE_URL
   });
+  const accessStore = new PostgresAccessStore({ connectionString: process.env.DATABASE_URL });
   const defaultOperatorId =
     process.env.DEFAULT_OPERATOR_ID ??
     (await ingestionRepository.findOperatorIdBySlug(process.env.DEFAULT_OPERATOR_SLUG ?? 'local-operator'));
@@ -982,9 +1687,24 @@ async function createRepositories(): Promise<{
     ingestionRepository,
     mappingRepository,
     postingRepository,
+    accessStore,
     defaultOperatorId,
     repositoryKind: 'postgres'
   };
+}
+
+async function bootstrapAdminUser(): Promise<void> {
+  const email = process.env.LEDGERISE_BOOTSTRAP_ADMIN_EMAIL;
+  const password = process.env.LEDGERISE_BOOTSTRAP_ADMIN_PASSWORD;
+  if (!email || !password) return;
+
+  await accessStore.inviteUser({
+    operatorId: defaultOperatorId,
+    email,
+    displayName: process.env.LEDGERISE_BOOTSTRAP_ADMIN_NAME ?? 'Ledgerise Admin',
+    role: 'admin',
+    passwordHash: hashPassword(password)
+  });
 }
 
 async function readJsonBody(
@@ -1065,6 +1785,10 @@ async function normalizeInboundPayload(
     return { status: 'ok', records: [payload] };
   }
 
+  if (getNestedString(payload, ['source', 'adapter']) === adapterName) {
+    return { status: 'ok', records: [payload] };
+  }
+
   const savedConfig = await getAdapterConfiguration(operatorId, adapterName);
   const normalized = await normalizeGenericWebhook({
     payload,
@@ -1077,6 +1801,18 @@ async function normalizeInboundPayload(
   }
 
   return { status: 'ok', records: normalized.records };
+}
+
+function getNestedString(input: unknown, path: string[]): string | undefined {
+  const value = path.reduce<unknown>((current, key) => {
+    if (current === null || typeof current !== 'object') {
+      return undefined;
+    }
+
+    return (current as Record<string, unknown>)[key];
+  }, input);
+
+  return typeof value === 'string' ? value : undefined;
 }
 
 function applyCors(response: ServerResponse) {
@@ -1093,7 +1829,47 @@ function getHeader(value: string | string[] | undefined): string | undefined {
 }
 
 function getOperatorId(request: IncomingMessage): string {
-  return getHeader(request.headers['x-operator-id']) ?? defaultOperatorId;
+  return verifyAuthToken(request)?.operatorId ?? getHeader(request.headers['x-operator-id']) ?? defaultOperatorId;
+}
+
+async function authorizeDashboardRequest(
+  request: IncomingMessage,
+  response: ServerResponse
+): Promise<boolean> {
+  const principal = verifyAuthToken(request);
+  if (!principal) {
+    sendJson(response, 401, {
+      status: 'error',
+      code: 'AUTHENTICATION_REQUIRED',
+      message: 'A valid dashboard session is required'
+    });
+    return false;
+  }
+
+  const user = await accessStore.findUser({
+    operatorId: principal.operatorId,
+    userId: principal.userId
+  });
+
+  if (!user || user.status === 'disabled') {
+    sendJson(response, 401, {
+      status: 'error',
+      code: 'AUTHENTICATION_REQUIRED',
+      message: 'A valid dashboard session is required'
+    });
+    return false;
+  }
+
+  return true;
+}
+
+function isDashboardApiPath(pathname: string): boolean {
+  if (!pathname.startsWith('/api/')) return false;
+  if (pathname.startsWith('/api/auth/')) return false;
+  if (pathname.startsWith('/api/ingest/')) return false;
+  if (pathname.startsWith('/api/posting-batches')) return false;
+  if (pathname.startsWith('/api/posting-artifacts')) return false;
+  return true;
 }
 
 async function authenticatePostingRequest(
@@ -1173,6 +1949,98 @@ function toIngestionErrorResponse(error: StoredIngestionError) {
     validation_errors: error.validationErrors,
     raw_record: error.rawRecord,
     occurred_at: error.occurredAt
+  };
+}
+
+function toUserResponse(user: AccessUser) {
+  return {
+    id: user.id,
+    email: user.email,
+    display_name: user.displayName,
+    role: user.role,
+    status: user.status,
+    has_password: Boolean(user.passwordHash),
+    invited_at: user.invitedAt,
+    last_login_at: user.lastLoginAt,
+    created_at: user.createdAt,
+    updated_at: user.updatedAt
+  };
+}
+
+function toApiKeyResponse(apiKey: ManagedApiKey) {
+  return {
+    id: apiKey.id,
+    name: apiKey.name,
+    key_prefix: apiKey.keyPrefix,
+    scopes: apiKey.scopes,
+    enabled: apiKey.enabled,
+    expires_at: apiKey.expiresAt,
+    last_used_at: apiKey.lastUsedAt,
+    revoked_at: apiKey.revokedAt,
+    created_at: apiKey.createdAt,
+    updated_at: apiKey.updatedAt
+  };
+}
+
+function toPollCursorResponse(cursor: StoredPollCursor) {
+  return {
+    adapter_name: cursor.adapterName,
+    cursor: cursor.cursor,
+    advanced_at: cursor.advancedAt,
+    updated_at: cursor.updatedAt
+  };
+}
+
+function toAccessUser(row: AccessUserRow): AccessUser {
+  return {
+    id: row.id,
+    operatorId: row.operator_id,
+    email: row.email,
+    displayName: row.display_name ?? undefined,
+    role: row.role,
+    status: row.status,
+    invitedAt: row.invited_at ? toIsoString(row.invited_at) : undefined,
+    lastLoginAt: row.last_login_at ? toIsoString(row.last_login_at) : undefined,
+    passwordHash: row.password_hash ?? undefined,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at)
+  };
+}
+
+function toManagedApiKey(row: ApiKeyManagementRow): ManagedApiKey {
+  return {
+    id: row.id,
+    operatorId: row.operator_id,
+    name: row.name,
+    keyPrefix: row.key_prefix,
+    scopes: row.scopes.filter((scope): scope is ApiScope => isApiScope(scope)),
+    enabled: row.enabled,
+    expiresAt: row.expires_at ? toIsoString(row.expires_at) : undefined,
+    lastUsedAt: row.last_used_at ? toIsoString(row.last_used_at) : undefined,
+    revokedAt: row.revoked_at ? toIsoString(row.revoked_at) : undefined,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at)
+  };
+}
+
+function toIsoString(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function toPollRunResponse(run: StoredPollRun) {
+  return {
+    id: run.id,
+    adapter_name: run.adapterName,
+    status: run.status,
+    previous_cursor: run.previousCursor,
+    next_cursor: run.nextCursor,
+    records_fetched: run.recordsFetched,
+    accepted_count: run.acceptedCount,
+    duplicate_count: run.duplicateCount,
+    rejected_count: run.rejectedCount,
+    error_message: run.errorMessage,
+    started_at: run.startedAt,
+    finished_at: run.finishedAt
   };
 }
 
@@ -1589,6 +2457,117 @@ function readCreditSplits(input: Record<string, unknown>): NewMappingRule['credi
 function readString(input: Record<string, unknown>, key: string): string | undefined {
   const value = input[key];
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function readUserRole(input: unknown): UserRole | undefined {
+  return typeof input === 'string' && userRoles.has(input) ? (input as UserRole) : undefined;
+}
+
+function readUserStatus(input: unknown): UserStatus | undefined {
+  return typeof input === 'string' && userStatuses.has(input) ? (input as UserStatus) : undefined;
+}
+
+function readApiScopes(input: unknown): ApiScope[] {
+  if (!Array.isArray(input)) return [];
+  return input.filter((scope): scope is ApiScope => typeof scope === 'string' && isApiScope(scope));
+}
+
+function isApiScope(input: string): input is ApiScope {
+  return (
+    input === 'posting_batches:create' ||
+    input === 'posting_batches:read' ||
+    input === 'posting_artifacts:download'
+  );
+}
+
+function createApiKeySecret(): string {
+  return `lr_live_sk_${randomBytes(24).toString('base64url')}`;
+}
+
+function hashPassword(password: string): string {
+  const salt = randomBytes(16).toString('base64url');
+  const key = scryptSync(password, salt, 64).toString('base64url');
+  return `scrypt:${salt}:${key}`;
+}
+
+function verifyPassword(password: string, storedHash: string): boolean {
+  const [scheme, salt, expectedKey] = storedHash.split(':');
+  if (scheme !== 'scrypt' || !salt || !expectedKey) return false;
+
+  const actual = Buffer.from(scryptSync(password, salt, 64).toString('base64url'));
+  const expected = Buffer.from(expectedKey);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function signAuthToken(user: AccessUser): string {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const payload = {
+    sub: user.id,
+    operator_id: user.operatorId,
+    email: user.email,
+    role: user.role,
+    exp: Math.floor(Date.now() / 1000) + 8 * 60 * 60
+  };
+  const encodedHeader = encodeTokenPart(header);
+  const encodedPayload = encodeTokenPart(payload);
+  const signature = signTokenParts(encodedHeader, encodedPayload);
+  return `${encodedHeader}.${encodedPayload}.${signature}`;
+}
+
+function verifyAuthToken(request: IncomingMessage): AuthPrincipal | null {
+  const authorization = getHeader(request.headers.authorization);
+  const token = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined;
+  if (!token) return null;
+
+  const [encodedHeader, encodedPayload, signature] = token.split('.');
+  if (!encodedHeader || !encodedPayload || !signature) return null;
+
+  const expectedSignature = signTokenParts(encodedHeader, encodedPayload);
+  if (!constantTimeEqual(signature, expectedSignature)) return null;
+
+  const payload = decodeTokenPart(encodedPayload);
+  if (!isRecord(payload)) return null;
+  if (typeof payload.exp !== 'number' || payload.exp < Math.floor(Date.now() / 1000)) return null;
+  if (
+    typeof payload.sub !== 'string' ||
+    typeof payload.operator_id !== 'string' ||
+    typeof payload.email !== 'string' ||
+    typeof payload.role !== 'string' ||
+    !userRoles.has(payload.role)
+  ) {
+    return null;
+  }
+
+  return {
+    userId: payload.sub,
+    operatorId: payload.operator_id,
+    email: payload.email,
+    role: payload.role as UserRole
+  };
+}
+
+function encodeTokenPart(input: unknown): string {
+  return Buffer.from(JSON.stringify(input), 'utf8').toString('base64url');
+}
+
+function decodeTokenPart(input: string): unknown {
+  try {
+    return JSON.parse(Buffer.from(input, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function signTokenParts(encodedHeader: string, encodedPayload: string): string {
+  return createHmac('sha256', process.env.AUTH_TOKEN_SECRET ?? 'ledgerise-local-development-secret')
+    .update(`${encodedHeader}.${encodedPayload}`)
+    .digest('base64url');
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function readNullableString(input: Record<string, unknown>, key: string): string | null | undefined {

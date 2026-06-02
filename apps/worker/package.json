@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ledgerise/adapter-inbound-generic-poll": "0.1.0",
     "@ledgerise/core-engine": "0.1.0",
     "@ledgerise/core-ingestion": "0.1.0"
   },

@@ -161,7 +161,7 @@ Every adapter must implement four methods:
 | `normalize(input)` | Converts raw input to canonical transaction records |
 | `healthcheck()` | Verifies connectivity to the source system |
 
-Full specification: [ADAPTER_SPEC.md](ADAPTER_SPEC.md)
+Full specification: [ADAPTER_SPEC.md](docs/ADAPTER_SPEC.md)
 
 Canonical transaction schema: [transaction.schema.json](schemas/transaction.schema.json)
 
@@ -199,8 +199,8 @@ ledgerise/
 ├── schemas/
 │   └── transaction.schema.json
 ├── docs/
+│   ├── ADAPTER_SPEC.md
 │   └── SCHEMA_REFERENCE.md
-├── ADAPTER_SPEC.md
 ├── CONTRIBUTING.md
 └── README.md
 ```
