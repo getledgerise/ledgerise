@@ -1937,6 +1937,78 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     return;
   }
 
+  if (request.method === 'GET' && url.pathname === '/api/audit-log.csv') {
+    if (!requireRole(dashboardPrincipal!, response, ['admin'])) return;
+
+    if (!pgPool) {
+      sendJson(response, 503, { status: 'error', code: 'NOT_AVAILABLE', message: 'Audit log requires a database connection' });
+      return;
+    }
+
+    const operatorId = getOperatorId(request);
+    const client = await pgPool.connect();
+    try {
+      const result = await client.query<{
+        id: string;
+        actor_id: string | null;
+        event_type: string;
+        entity_type: string;
+        entity_id: string | null;
+        before_state: unknown;
+        after_state: unknown;
+        metadata: unknown;
+        occurred_at: Date;
+      }>(
+        `SELECT ae.id, ae.actor_id, ae.event_type, ae.entity_type, ae.entity_id,
+                ae.before_state, ae.after_state, ae.metadata, ae.occurred_at,
+                u.email AS actor_email
+         FROM audit_events ae
+         LEFT JOIN users u ON u.id = ae.actor_id
+         WHERE ae.operator_id = $1
+         ORDER BY ae.occurred_at DESC
+         LIMIT 50000`,
+        [operatorId]
+      );
+
+      const escape = (v: unknown): string => {
+        if (v === null || v === undefined) return '';
+        const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+        if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+          return `"${s.replace(/"/g, '""')}"`;
+        }
+        return s;
+      };
+
+      const header = 'id,occurred_at,event_type,entity_type,entity_id,actor_email,actor_id,before_state,after_state,metadata\n';
+      const rows = result.rows.map((row) =>
+        [
+          row.id,
+          row.occurred_at.toISOString(),
+          row.event_type,
+          row.entity_type,
+          row.entity_id ?? '',
+          (row as Record<string, unknown>)['actor_email'] ?? '',
+          row.actor_id ?? '',
+          row.before_state,
+          row.after_state,
+          row.metadata
+        ]
+          .map(escape)
+          .join(',')
+      );
+
+      const csv = header + rows.join('\n');
+      const filename = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+      sendText(response, 200, csv, {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="${filename}"`
+      });
+    } finally {
+      client.release();
+    }
+    return;
+  }
+
   sendJson(response, 404, {
     status: 'error',
     code: 'NOT_FOUND',

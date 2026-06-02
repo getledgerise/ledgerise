@@ -1114,6 +1114,7 @@ export function App() {
             pollStatuses={pollStatuses}
             importCoaFromCsv={importCoaFromCsv}
             createApiKey={createApiKey}
+            currentUserRole={authUser?.role ?? 'finance'}
             inviteUser={inviteUser}
             newApiKeySecret={newApiKeySecret}
             newUserPassword={newUserPassword}
@@ -2148,6 +2149,7 @@ function SettingsView(props: {
   pollStatuses: Record<string, PollStatusRecord>;
   importCoaFromCsv: (rows: CoaRow[]) => Promise<void>;
   createApiKey: (input: { name: string; scopes: ApiScope[] }) => Promise<void>;
+  currentUserRole: UserRole;
   inviteUser: (input: { email: string; displayName?: string; role: UserRole; password?: string }) => Promise<void>;
   newApiKeySecret: string;
   newUserPassword: string;
@@ -2172,6 +2174,7 @@ function SettingsView(props: {
     pollStatuses,
     importCoaFromCsv,
     createApiKey,
+    currentUserRole,
     inviteUser,
     newApiKeySecret,
     newUserPassword,
@@ -2231,6 +2234,7 @@ function SettingsView(props: {
             <UsersSettingsPanel
               apiKeys={apiKeys}
               createApiKey={createApiKey}
+              currentUserRole={currentUserRole}
               inviteUser={inviteUser}
               newApiKeySecret={newApiKeySecret}
               newUserPassword={newUserPassword}
@@ -2256,6 +2260,7 @@ function SettingsView(props: {
 function UsersSettingsPanel(props: {
   apiKeys: ApiKeyRecord[];
   createApiKey: (input: { name: string; scopes: ApiScope[] }) => Promise<void>;
+  currentUserRole: UserRole;
   inviteUser: (input: { email: string; displayName?: string; role: UserRole; password?: string }) => Promise<void>;
   newApiKeySecret: string;
   newUserPassword: string;
@@ -2269,6 +2274,7 @@ function UsersSettingsPanel(props: {
   const {
     apiKeys,
     createApiKey,
+    currentUserRole,
     inviteUser,
     newApiKeySecret,
     newUserPassword,
@@ -2293,6 +2299,21 @@ function UsersSettingsPanel(props: {
     setEditingUser(user);
     setEditUserForm({ role: user.role, status: user.status });
     setEditUserOpen(true);
+  }
+
+  async function downloadAuditLog() {
+    const token = localStorage.getItem(authTokenStorageKey);
+    const res = await fetch(`${apiBaseUrl}/api/audit-log.csv`, {
+      headers: token ? { authorization: `Bearer ${token}` } : {}
+    });
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async function copyText(text: string, id: string) {
@@ -2333,7 +2354,12 @@ function UsersSettingsPanel(props: {
           <h2>Users</h2>
           <p className="panel-desc">Manage team access. A temporary credential is generated for each new user.</p>
         </div>
-        <button className="btn btn-primary btn-sm" type="button" onClick={() => setInviteOpen(true)}>Add User</button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          {currentUserRole === 'admin' ? (
+            <button className="btn btn-secondary btn-sm" type="button" onClick={() => void downloadAuditLog()}>Download Audit Log</button>
+          ) : null}
+          <button className="btn btn-primary btn-sm" type="button" onClick={() => setInviteOpen(true)}>Add User</button>
+        </div>
       </div>
 
       {newUserPassword ? (
