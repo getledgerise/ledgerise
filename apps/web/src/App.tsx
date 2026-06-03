@@ -3795,9 +3795,17 @@ function rowsFromMappingConfig(
 
 function buildAdapterOperationalConfig(adapter: AdapterRecord, formData: FormData): unknown {
   if (adapter.name === 'generic-csv') {
+    const allRows = readMappingRows(formData, 'generic-csv-map');
+    const columnRows = allRows.filter((row) => row.sourcePath.trim());
+    const defaultRows = allRows.filter((row) => !row.sourcePath.trim() && row.defaultValue.trim());
+    const defaults: Record<string, unknown> = {};
+    for (const row of defaultRows) {
+      defaults[row.canonicalField] = row.defaultValue === 'null' ? null : row.defaultValue;
+    }
     return {
       ...defaultAdapterOperationalConfig(adapter.name),
-      column_mappings: mappingRowsToObject(readMappingRows(formData, 'generic-csv-map'))
+      column_mappings: mappingRowsToObject(columnRows),
+      ...(Object.keys(defaults).length > 0 ? { defaults } : {})
     };
   }
 
@@ -3962,7 +3970,7 @@ function readMappingRows(formData: FormData, mapId: string): AdapterMappingRow[]
       defaultValue: row.defaultValue ?? '',
       required: Boolean(row.required)
     }))
-    .filter((row) => row.sourcePath && row.canonicalField);
+    .filter((row) => row.canonicalField && (row.sourcePath || row.defaultValue));
 }
 
 type CsvColumnSpec = string | { column: string; transform: string; enum_map?: string };
