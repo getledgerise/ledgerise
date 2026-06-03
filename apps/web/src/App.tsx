@@ -1,5 +1,9 @@
 import { type ChangeEvent, FormEvent, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from 'react';
 
+const DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
+const DEMO_EMAIL_KEY = 'ledgerise_demo_email';
+const DEMO_PASSWORD_KEY = 'ledgerise_demo_password';
+
 type Screen = 'transactions' | 'mapping-rules' | 'journal-log' | 'settings';
 type SettingsTab = 'coa' | 'schema' | 'adapters' | 'users' | 'system';
 type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
@@ -1080,7 +1084,7 @@ export function App() {
     return <LoginView error={authError} onLogin={login} />;
   }
 
-  if (mustChangePassword && authUser) {
+  if (mustChangePassword && authUser && !DEMO_MODE) {
     return <ChangePasswordView user={authUser} onChangePassword={changePassword} />;
   }
 
@@ -2305,9 +2309,21 @@ function LoginView(props: {
   onLogin: (input: { email: string; password: string }) => Promise<void>;
 }) {
   const { error, onLogin } = props;
-  const [form, setForm] = useState({ email: '', password: '' });
+  const [form, setForm] = useState(() => ({
+    email: DEMO_MODE ? (localStorage.getItem(DEMO_EMAIL_KEY) ?? '') : '',
+    password: DEMO_MODE ? (localStorage.getItem(DEMO_PASSWORD_KEY) ?? '') : '',
+  }));
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState('');
+
+  function updateForm(patch: Partial<typeof form>) {
+    const next = { ...form, ...patch };
+    setForm(next);
+    if (DEMO_MODE) {
+      if (patch.email !== undefined) localStorage.setItem(DEMO_EMAIL_KEY, next.email);
+      if (patch.password !== undefined) localStorage.setItem(DEMO_PASSWORD_KEY, next.password);
+    }
+  }
 
   async function submitLogin(event: FormEvent) {
     event.preventDefault();
@@ -2331,6 +2347,9 @@ function LoginView(props: {
           <span className="auth-wordmark">Ledgerise</span>
         </div>
         <h1 className="auth-heading">Sign in</h1>
+        {DEMO_MODE ? (
+          <p className="auth-demo-notice">Demo mode — credentials are saved in your browser.</p>
+        ) : null}
         <form className="auth-form" onSubmit={submitLogin}>
           <div className="form-field">
             <label>Email address</label>
@@ -2340,7 +2359,7 @@ function LoginView(props: {
               type="email"
               placeholder="you@company.com"
               value={form.email}
-              onChange={(event) => setForm({ ...form, email: event.target.value })}
+              onChange={(event) => updateForm({ email: event.target.value })}
             />
           </div>
           <div className="form-field">
@@ -2351,7 +2370,7 @@ function LoginView(props: {
               type="password"
               placeholder="••••••••"
               value={form.password}
-              onChange={(event) => setForm({ ...form, password: event.target.value })}
+              onChange={(event) => updateForm({ password: event.target.value })}
             />
           </div>
           {localError || error ? <div className="form-error">{localError || error}</div> : null}
@@ -3042,6 +3061,54 @@ function CsvCoaImportPanel(props: {
   );
 }
 
+function DemoResetSection() {
+  const [confirming, setConfirming] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [error, setError] = useState('');
+
+  async function doReset() {
+    setResetting(true);
+    setError('');
+    try {
+      const token = localStorage.getItem(authTokenStorageKey);
+      const res = await fetch(`${apiBaseUrl}/api/demo/reset`, {
+        method: 'POST',
+        headers: token ? { authorization: `Bearer ${token}` } : {}
+      });
+      if (!res.ok) {
+        const body = await res.json() as { message?: string };
+        throw new Error(body.message ?? 'Reset failed');
+      }
+      window.location.reload();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Reset failed');
+      setResetting(false);
+      setConfirming(false);
+    }
+  }
+
+  return (
+    <div className="config-section" style={{ borderTop: '1px solid var(--border)', marginTop: 'var(--s4)', paddingTop: 'var(--s4)' }}>
+      <div className="config-section-title" style={{ color: 'var(--danger, #c0392b)' }}>Demo</div>
+      <p className="panel-desc">Reset all data back to the initial seeded state. This cannot be undone.</p>
+      {error ? <div className="form-error" style={{ marginBottom: 'var(--s2)' }}>{error}</div> : null}
+      {confirming ? (
+        <div style={{ display: 'flex', gap: 'var(--s2)', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>All data will be permanently deleted. Are you sure?</span>
+          <button className="btn btn-danger btn-sm" type="button" onClick={() => void doReset()} disabled={resetting}>
+            {resetting ? 'Resetting…' : 'Yes, reset everything'}
+          </button>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setConfirming(false)} disabled={resetting}>Cancel</button>
+        </div>
+      ) : (
+        <button className="btn btn-danger btn-sm" type="button" onClick={() => setConfirming(true)}>
+          Reset Demo Data
+        </button>
+      )}
+    </div>
+  );
+}
+
 function SystemSettingsPanel(props: {
   settings: SystemSettings | null;
   onSave: (patch: Partial<SystemSettings>) => Promise<void>;
@@ -3155,6 +3222,7 @@ function SystemSettingsPanel(props: {
           <button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
         </div>
       </form>
+      {DEMO_MODE ? <DemoResetSection /> : null}
     </div>
   );
 }

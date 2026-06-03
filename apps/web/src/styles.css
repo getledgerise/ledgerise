@@ -233,6 +233,16 @@ button, input, select, textarea { font-family: inherit; }
   margin-bottom: var(--s6);
 }
 
+.auth-demo-notice {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--s2) var(--s3);
+  margin-bottom: var(--s4);
+}
+
 .auth-form {
   display: flex;
   flex-direction: column;

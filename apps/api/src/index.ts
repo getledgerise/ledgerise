@@ -64,6 +64,7 @@ import { PostgresPostingRepository } from '@ledgerise/core-posting/postgres';
 import { findAdapter, listAdapters } from './adapterRegistry.js';
 
 const port = Number(process.env.API_PORT ?? '3000');
+const demoMode = process.env.DEMO_MODE === 'true';
 
 type LogLevel = 'info' | 'warn' | 'error';
 
@@ -834,6 +835,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
   }
 
   if (request.method === 'POST' && url.pathname === '/api/auth/change-password') {
+    if (demoMode) {
+      sendJson(response, 403, { status: 'error', code: 'DEMO_MODE', message: 'Password changes are disabled in demo mode.' });
+      return;
+    }
     const principal = verifyAuthToken(request);
     if (!principal) {
       sendJson(response, 401, {
@@ -2026,6 +2031,79 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
         'content-type': 'text/csv; charset=utf-8',
         'content-disposition': `attachment; filename="${filename}"`
       });
+    } finally {
+      client.release();
+    }
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/demo/reset') {
+    if (!demoMode) {
+      sendJson(response, 404, { status: 'error', code: 'NOT_FOUND', message: 'Route not found' });
+      return;
+    }
+    const principal = verifyAuthToken(request);
+    if (!principal || principal.role !== 'admin') {
+      sendJson(response, 403, { status: 'error', code: 'FORBIDDEN', message: 'Admin access required' });
+      return;
+    }
+    if (!pgPool) {
+      sendJson(response, 503, { status: 'error', code: 'NOT_AVAILABLE', message: 'Demo reset requires a database connection' });
+      return;
+    }
+    const client = await pgPool.connect();
+    try {
+      await client.query(`
+        TRUNCATE
+          posting_artifact_downloads,
+          posting_artifacts,
+          posting_attempts,
+          posting_batches,
+          journal_entry_lines,
+          journal_entries,
+          mapping_rule_credit_splits,
+          mapping_rule_versions,
+          mapping_rules,
+          chart_of_accounts,
+          transaction_ingestion_errors,
+          canonical_transactions,
+          adapter_poll_runs,
+          adapter_poll_cursors,
+          audit_events,
+          api_keys,
+          users
+        RESTART IDENTITY CASCADE
+      `);
+      await client.query(`
+        INSERT INTO chart_of_accounts (operator_id, code, name, type)
+        SELECT operators.id, account.code, account.name, account.type
+        FROM operators
+        CROSS JOIN (
+          VALUES
+            ('1000', 'Cash / Settlement Asset', 'asset'),
+            ('1100', 'Aggregator Float', 'asset'),
+            ('2000', 'Customer Liability', 'liability'),
+            ('4000', 'Bill Payment Revenue', 'revenue'),
+            ('5000', 'Processing Fees', 'expense'),
+            ('9999', 'Suspense', 'liability')
+        ) AS account(code, name, type)
+        WHERE operators.slug = $1
+        ON CONFLICT (operator_id, code) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, updated_at = now()
+      `, [process.env.DEFAULT_OPERATOR_SLUG ?? 'local-operator']);
+      const bootstrapEmail = process.env.LEDGERISE_BOOTSTRAP_ADMIN_EMAIL;
+      const bootstrapPassword = process.env.LEDGERISE_BOOTSTRAP_ADMIN_PASSWORD;
+      const bootstrapName = process.env.LEDGERISE_BOOTSTRAP_ADMIN_NAME ?? 'Ledgerise Admin';
+      if (bootstrapEmail && bootstrapPassword) {
+        await accessStore.inviteUser({
+          operatorId: defaultOperatorId,
+          email: bootstrapEmail,
+          displayName: bootstrapName,
+          role: 'admin',
+          passwordHash: hashPassword(bootstrapPassword)
+        });
+      }
+      log('info', 'demo_reset', { operatorId: principal.operatorId, userId: principal.userId });
+      sendJson(response, 200, { status: 'ok' });
     } finally {
       client.release();
     }
