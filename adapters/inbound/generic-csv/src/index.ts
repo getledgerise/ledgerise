@@ -246,6 +246,8 @@ function applyTransform(
   amountMultiplier: number | undefined
 ): unknown {
   switch (transform) {
+    case 'none':
+      return value;
     case 'parse_datetime':
       return parseDateTime(value) ?? value;
     case 'amount_to_minor': {
