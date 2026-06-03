@@ -3755,7 +3755,7 @@ function AdapterConfigFieldView({ field }: { field: AdapterConfigField }) {
           {previewOutput !== null ? 'Hide preview' : 'Preview mapping'}
         </button>
       </div>
-      <div className="field-map-note">Map CSV columns to canonical fields. Leave the source column blank and fill in a default value to hardcode a field (e.g. currency=NGN, direction=debit). Use null as the default value for nullable fields like settled_at.</div>
+      <div className="field-map-note">Detected source fields are mapped onto Ledgerise canonical fields. Adapter defaults still handle normalization, validation, and required canonical structure.</div>
       {previewOutput !== null ? (
         <div className="field-map-preview">
           <div className="field-map-preview-title">Preview output (first data row)</div>
@@ -3792,8 +3792,7 @@ function getAdapterConfigTemplate(adapter: AdapterRecord): AdapterConfigTemplate
             ...field,
             rows: rowsFromMappingConfig(
               isRecord(config.column_mappings) ? config.column_mappings : undefined,
-              field.rows,
-              isRecord(config.defaults) ? config.defaults as Record<string, unknown> : undefined
+              field.rows
             )
           };
         }
@@ -3826,66 +3825,39 @@ function getAdapterConfigTemplate(adapter: AdapterRecord): AdapterConfigTemplate
 
 function rowsFromMappingConfig(
   mapping: Record<string, unknown> | undefined,
-  fallback: AdapterMappingRow[],
-  defaults?: Record<string, unknown>
+  fallback: AdapterMappingRow[]
 ): AdapterMappingRow[] {
+  if (!mapping) return fallback;
   const fallbackByCanonical = new Map(fallback.map((row) => [row.canonicalField, row]));
-  const rows: AdapterMappingRow[] = mapping
-    ? Object.entries(mapping)
-        .filter(([, spec]) => {
-          const col = spec !== null && typeof spec === 'object' && !Array.isArray(spec)
-            ? (spec as Record<string, unknown>).column
-            : spec;
-          return typeof col === 'string' && String(col).trim().length > 0;
-        })
-        .map(([canonicalField, spec]) => {
-          const isObj = spec !== null && typeof spec === 'object' && !Array.isArray(spec);
-          const obj = isObj ? (spec as Record<string, unknown>) : null;
-          const sourcePath = obj ? String(obj.column ?? '') : String(spec);
-          const transform = obj ? String(obj.transform ?? 'copy') : 'copy';
-          const enumMap = obj ? String(obj.enum_map ?? '') : '';
-          const fallbackRow = fallbackByCanonical.get(canonicalField);
-          return {
-            sourcePath,
-            canonicalField,
-            transform: transform || fallbackRow?.transform || defaultTransformForField(canonicalField),
-            defaultValue: enumMap || fallbackRow?.defaultValue || '',
-            required: fallbackRow?.required ?? requiredCanonicalFields.has(canonicalField)
-          };
-        })
-    : [...fallback];
-
-  if (defaults) {
-    const mapped = new Set(rows.map((r) => r.canonicalField));
-    for (const [canonicalField, value] of Object.entries(defaults)) {
-      if (!mapped.has(canonicalField)) {
-        rows.push({
-          sourcePath: '',
-          canonicalField,
-          transform: 'copy',
-          defaultValue: value === null ? 'null' : String(value),
-          required: false
-        });
-      }
-    }
-  }
-
-  return rows;
+  return Object.entries(mapping)
+    .filter(([, spec]) => {
+      const col = spec !== null && typeof spec === 'object' && !Array.isArray(spec)
+        ? (spec as Record<string, unknown>).column
+        : spec;
+      return typeof col === 'string' && String(col).trim().length > 0;
+    })
+    .map(([canonicalField, spec]) => {
+      const isObj = spec !== null && typeof spec === 'object' && !Array.isArray(spec);
+      const obj = isObj ? (spec as Record<string, unknown>) : null;
+      const sourcePath = obj ? String(obj.column ?? '') : String(spec);
+      const transform = obj ? String(obj.transform ?? 'copy') : 'copy';
+      const enumMap = obj ? String(obj.enum_map ?? '') : '';
+      const fallbackRow = fallbackByCanonical.get(canonicalField);
+      return {
+        sourcePath,
+        canonicalField,
+        transform: transform || fallbackRow?.transform || defaultTransformForField(canonicalField),
+        defaultValue: enumMap || fallbackRow?.defaultValue || '',
+        required: fallbackRow?.required ?? requiredCanonicalFields.has(canonicalField)
+      };
+    });
 }
 
 function buildAdapterOperationalConfig(adapter: AdapterRecord, formData: FormData): unknown {
   if (adapter.name === 'generic-csv') {
-    const allRows = readMappingRows(formData, 'generic-csv-map');
-    const columnRows = allRows.filter((row) => row.sourcePath.trim());
-    const defaultRows = allRows.filter((row) => !row.sourcePath.trim() && row.defaultValue.trim());
-    const defaults: Record<string, unknown> = {};
-    for (const row of defaultRows) {
-      defaults[row.canonicalField] = row.defaultValue === 'null' ? null : row.defaultValue;
-    }
     return {
       ...defaultAdapterOperationalConfig(adapter.name),
-      column_mappings: mappingRowsToObject(columnRows),
-      ...(Object.keys(defaults).length > 0 ? { defaults } : {})
+      column_mappings: mappingRowsToObject(readMappingRows(formData, 'generic-csv-map'))
     };
   }
 
@@ -4050,7 +4022,7 @@ function readMappingRows(formData: FormData, mapId: string): AdapterMappingRow[]
       defaultValue: row.defaultValue ?? '',
       required: Boolean(row.required)
     }))
-    .filter((row) => row.canonicalField && (row.sourcePath || row.defaultValue));
+    .filter((row) => row.sourcePath && row.canonicalField);
 }
 
 type CsvColumnSpec = string | { column: string; transform: string; enum_map?: string };
