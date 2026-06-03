@@ -127,29 +127,77 @@ CREATE DATABASE ledgerise OWNER ledgerise;
 SQL
 ```
 
+> **Password note:** Use only alphanumeric characters in the database password. Special characters like `@`, `#`, `?`, and `&` are URL metacharacters — if used in `DATABASE_URL` they silently corrupt the connection string and produce no error output at startup.
+
+> **PostgreSQL 15+ note:** If you create the database separately from the user (e.g. via `createdb`), the `ledgerise` user may not have `CREATE` permission on the `public` schema. Fix it with:
+> ```bash
+> sudo -u postgres psql -d ledgerise -c "GRANT ALL ON SCHEMA public TO ledgerise;"
+> ```
+> Creating the database with `OWNER ledgerise` (as shown above) grants this automatically.
+
 #### 3. Clone and build
 
 ```bash
 cd /opt
 sudo git clone https://github.com/keneohiaeri/ledgerise.git
-sudo chown -R $USER:$USER ledgerise
-cd ledgerise
+sudo chown -R www-data:www-data ledgerise
+sudo -u www-data bash
+cd /opt/ledgerise
 npm install
+
+# Build all backend packages and the API/worker
 npm run build
+
+# Build the web frontend — must set the public API URL at build time
+VITE_API_BASE_URL=https://api.your-domain.com npm run build -w apps/web
+exit
 ```
+
+> **Important:** `VITE_API_BASE_URL` is baked into the frontend JavaScript at build time by Vite. Set it to the public HTTPS URL of your API before running the web build. If the URL is wrong or missing, the dashboard will show "failed to fetch" errors. If you change the API URL later, rebuild the frontend and redeploy `apps/web/dist/`.
 
 #### 4. Run migrations
 
+Set your connection string and apply all migrations in order:
+
 ```bash
-export DATABASE_URL="postgres://ledgerise:change-me@localhost:5432/ledgerise"
-for f in infra/migrations/*.sql; do psql "$DATABASE_URL" -f "$f"; done
-psql "$DATABASE_URL" -f infra/seed/0001_local_operator_and_adapters.sql
-psql "$DATABASE_URL" -f infra/seed/0002_default_coa.sql
+DB="postgres://ledgerise:change-me@localhost:5432/ledgerise"
+
+for f in infra/migrations/*.sql; do
+  echo "Applying $f..."
+  psql "$DB" -f "$f"
+done
+
+psql "$DB" -f infra/seed/0001_local_operator_and_adapters.sql
+psql "$DB" -f infra/seed/0002_default_coa.sql
 ```
+
+Verify the tables were created:
+
+```bash
+psql "$DB" -c "\dt"
+```
+
+You should see 18 tables. If you see `permission denied for schema public`, the database user does not own the database — see the note in step 2.
 
 #### 5. Create a systemd service for the API
 
-Create `/etc/systemd/system/ledgerise-api.service`:
+Create a `.env` file at `/opt/ledgerise/.env` with your production values (see the Environment Variables section above), owned by `www-data`:
+
+```bash
+sudo touch /opt/ledgerise/.env
+sudo chown www-data:www-data /opt/ledgerise/.env
+sudo chmod 600 /opt/ledgerise/.env
+sudo -u www-data nano /opt/ledgerise/.env
+```
+
+Find the path to your Node binary:
+
+```bash
+which node
+# e.g. /usr/bin/node or /root/.nvm/versions/node/v22.18.0/bin/node
+```
+
+Then create `/etc/systemd/system/ledgerise-api.service`, replacing `<node-path>` with the output of `which node`:
 
 ```ini
 [Unit]
@@ -160,26 +208,27 @@ After=network.target postgresql.service
 Type=simple
 User=www-data
 WorkingDirectory=/opt/ledgerise
-ExecStart=/usr/bin/node apps/api/dist/index.js
+ExecStart=<node-path> --env-file=/opt/ledgerise/.env apps/api/dist/index.js
 Restart=on-failure
 RestartSec=5
-
-Environment=NODE_ENV=production
-Environment=API_PORT=3000
-Environment=DATABASE_URL=postgres://ledgerise:change-me@localhost:5432/ledgerise?sslmode=disable
-Environment=AUTH_TOKEN_SECRET=REPLACE_WITH_openssl_rand_base64_32
-Environment=LEDGERISE_CREDENTIALS_KEY=REPLACE_WITH_openssl_rand_hex_32
-Environment=LEDGERISE_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
-Environment=LEDGERISE_BOOTSTRAP_ADMIN_PASSWORD=replace-on-first-login
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+> **Why `--env-file` instead of `Environment=` lines:** Node 20+ natively parses `.env` files including quoted values and multi-word strings. Using `Environment=` directives in systemd requires shell-escaping every value, and sourcing a `.env` file in a shell wrapper can fail on values containing `@`, `#`, or spaces.
+
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now ledgerise-api
 sudo systemctl status ledgerise-api
+```
+
+Check the logs to confirm it started in postgres mode:
+
+```bash
+sudo journalctl -u ledgerise-api -n 20
+# Should include: "event":"server_start","repository":"postgres"
 ```
 
 #### 6. Serve the web frontend with nginx
@@ -360,6 +409,44 @@ Similar to Render but with a project-based UI that groups services together.
 - [ ] Health check URL configured in your load balancer or hosting platform
 - [ ] Migration pre-deploy step runs before new API versions start
 - [ ] `VITE_API_BASE_URL` matches the actual public API URL used for the frontend build
+
+---
+
+## Troubleshooting
+
+### API starts in memory mode (`"repository":"memory"`)
+
+`DATABASE_URL` is not being read. Check:
+- The `.env` file contains `DATABASE_URL` with no shell-special characters in the password
+- You are loading it with `node --env-file=.env` (not `source .env` or `export $(cat .env)`)
+- No `DATABASE_URL` is already exported in the shell session (`unset DATABASE_URL` to clear it)
+
+### API exits silently with no output
+
+Usually caused by a malformed `DATABASE_URL`. Passwords containing `@`, `#`, `?`, or `&` corrupt the URL. Use `node --env-file=.env -e "console.log(process.env.DATABASE_URL)"` to inspect the value actually received. Use a plain alphanumeric password to avoid this entirely.
+
+### `permission denied for schema public` during migrations
+
+PostgreSQL 15+ restricts `CREATE TABLE` on the public schema to the database owner. Fix:
+```bash
+sudo -u postgres psql -d ledgerise -c "GRANT ALL ON SCHEMA public TO ledgerise;"
+```
+
+### Dashboard shows "failed to fetch"
+
+The frontend was built with the wrong `VITE_API_BASE_URL`. Rebuild:
+```bash
+VITE_API_BASE_URL=https://api.your-domain.com npm run build -w apps/web
+```
+Then redeploy `apps/web/dist/`.
+
+### "Email or password incorrect" on first login
+
+The bootstrap admin user may not have been created, or the password hash doesn't match. Check:
+```bash
+psql "$DATABASE_URL" -c "SELECT email, status, password_hash IS NOT NULL AS has_password FROM users;"
+```
+If the user exists with `has_password = false`, restart the API with `LEDGERISE_BOOTSTRAP_ADMIN_PASSWORD` set. If the table is empty, confirm migrations and seed ran successfully.
 
 ---
 
