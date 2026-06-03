@@ -299,7 +299,7 @@ const canonicalFieldOptions = [
   'channel',
   'metadata'
 ];
-const transformOptions = ['copy', 'parse_datetime', 'amount_to_minor', 'enum_map', 'lowercase', 'uppercase', 'mask_phone'];
+const transformOptions = ['none', 'copy', 'parse_datetime', 'amount_to_minor', 'enum_map', 'lowercase', 'uppercase', 'mask_phone'];
 
 const adapterConfigTemplates: Record<string, AdapterConfigTemplate> = {
   'generic-webhook': {
@@ -3652,8 +3652,8 @@ function AdapterConfigFieldView({ field }: { field: AdapterConfigField }) {
                 type="text"
                 name={`map:${mappingField.id}:${index}:defaultValue`}
                 value={row.defaultValue}
-                placeholder={row.transform === 'enum_map' ? 'src=canonical, ...' : ''}
-                style={{ opacity: row.transform === 'enum_map' ? 1 : 0.35 }}
+                placeholder={row.transform === 'enum_map' ? 'src=canonical, ...' : row.sourcePath ? '' : 'fixed value'}
+                style={{ opacity: !row.sourcePath || row.transform === 'enum_map' ? 1 : 0.35 }}
                 onChange={(event) => updateMappingRow(setMappingRows, index, { defaultValue: event.target.value })}
               />
               <div className="field-map-actions">
@@ -3732,7 +3732,8 @@ function getAdapterConfigTemplate(adapter: AdapterRecord): AdapterConfigTemplate
             ...field,
             rows: rowsFromMappingConfig(
               isRecord(config.column_mappings) ? config.column_mappings : undefined,
-              field.rows
+              field.rows,
+              isRecord(config.defaults) ? config.defaults as Record<string, unknown> : undefined
             )
           };
         }
@@ -3765,32 +3766,66 @@ function getAdapterConfigTemplate(adapter: AdapterRecord): AdapterConfigTemplate
 
 function rowsFromMappingConfig(
   mapping: Record<string, unknown> | undefined,
-  fallback: AdapterMappingRow[]
+  fallback: AdapterMappingRow[],
+  defaults?: Record<string, unknown>
 ): AdapterMappingRow[] {
-  if (!mapping) return fallback;
   const fallbackByCanonical = new Map(fallback.map((row) => [row.canonicalField, row]));
-  return Object.entries(mapping)
-    .filter(([, spec]) => {
-      const col = spec !== null && typeof spec === 'object' && !Array.isArray(spec)
-        ? (spec as Record<string, unknown>).column
-        : spec;
-      return typeof col === 'string' && String(col).trim().length > 0;
-    })
-    .map(([canonicalField, spec]) => {
-      const isObj = spec !== null && typeof spec === 'object' && !Array.isArray(spec);
-      const obj = isObj ? (spec as Record<string, unknown>) : null;
-      const sourcePath = obj ? String(obj.column ?? '') : String(spec);
-      const transform = obj ? String(obj.transform ?? 'copy') : 'copy';
-      const enumMap = obj ? String(obj.enum_map ?? '') : '';
-      const fallbackRow = fallbackByCanonical.get(canonicalField);
-      return {
-        sourcePath,
+  const rows: AdapterMappingRow[] = mapping
+    ? Object.entries(mapping)
+        .filter(([, spec]) => {
+          const col = spec !== null && typeof spec === 'object' && !Array.isArray(spec)
+            ? (spec as Record<string, unknown>).column
+            : spec;
+          return typeof col === 'string' && String(col).trim().length > 0;
+        })
+        .map(([canonicalField, spec]) => {
+          const isObj = spec !== null && typeof spec === 'object' && !Array.isArray(spec);
+          const obj = isObj ? (spec as Record<string, unknown>) : null;
+          const sourcePath = obj ? String(obj.column ?? '') : String(spec);
+          const transform = obj ? String(obj.transform ?? 'copy') : 'copy';
+          const enumMap = obj ? String(obj.enum_map ?? '') : '';
+          const fallbackRow = fallbackByCanonical.get(canonicalField);
+          return {
+            sourcePath,
+            canonicalField,
+            transform: transform || fallbackRow?.transform || defaultTransformForField(canonicalField),
+            defaultValue: enumMap || fallbackRow?.defaultValue || '',
+            required: fallbackRow?.required ?? requiredCanonicalFields.has(canonicalField)
+          };
+        })
+    : [...fallback];
+
+  const mapped = new Set(rows.map((r) => r.canonicalField));
+
+  for (const canonicalField of requiredCanonicalFields) {
+    if (!mapped.has(canonicalField)) {
+      const savedDefault = defaults?.[canonicalField];
+      rows.push({
+        sourcePath: '',
         canonicalField,
-        transform: transform || fallbackRow?.transform || defaultTransformForField(canonicalField),
-        defaultValue: enumMap || fallbackRow?.defaultValue || '',
-        required: fallbackRow?.required ?? requiredCanonicalFields.has(canonicalField)
-      };
-    });
+        transform: defaultTransformForField(canonicalField),
+        defaultValue: savedDefault === undefined ? '' : savedDefault === null ? 'null' : String(savedDefault),
+        required: true
+      });
+      mapped.add(canonicalField);
+    }
+  }
+
+  if (defaults) {
+    for (const [canonicalField, value] of Object.entries(defaults)) {
+      if (!mapped.has(canonicalField)) {
+        rows.push({
+          sourcePath: '',
+          canonicalField,
+          transform: 'copy',
+          defaultValue: value === null ? 'null' : String(value),
+          required: false
+        });
+      }
+    }
+  }
+
+  return rows;
 }
 
 function buildAdapterOperationalConfig(adapter: AdapterRecord, formData: FormData): unknown {
@@ -4070,6 +4105,8 @@ function runPreviewMapping(sample: string, rows: AdapterMappingRow[], csvMode: b
 
 function applyPreviewTransform(value: string, transform: string, enumMapStr: string): unknown {
   switch (transform) {
+    case 'none':
+      return value;
     case 'parse_datetime': {
       const t = value.trim();
       const excel = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?/.exec(t);
