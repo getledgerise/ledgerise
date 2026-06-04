@@ -476,6 +476,8 @@ input.fi:focus, select.fi:focus { border-color: var(--color-primary); box-shadow
   background: none; font-family: var(--font);
 }
 .btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+.btn-spinner { animation: btn-spin 0.65s linear infinite; }
 
 .btn-primary  { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .btn-primary:hover { background: var(--color-primary-dark); border-color: var(--color-primary-dark); }

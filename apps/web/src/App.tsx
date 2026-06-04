@@ -569,6 +569,10 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [engineRunning, setEngineRunning] = useState(false);
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+  const [ruleSaving, setRuleSaving] = useState(false);
+  const [csvImporting, setCsvImporting] = useState(false);
   const [authToken, setAuthToken] = useState(() => localStorage.getItem(authTokenStorageKey) ?? '');
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authChecking, setAuthChecking] = useState(Boolean(authToken));
@@ -812,6 +816,7 @@ export function App() {
       }))
     };
 
+    setRuleSaving(true);
     try {
       if (ruleForm.id) {
         await apiPatch(`/api/mapping-rules/${ruleForm.id}`, payload);
@@ -825,6 +830,8 @@ export function App() {
       await refreshOperationalData();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Failed to save mapping rule');
+    } finally {
+      setRuleSaving(false);
     }
   }
 
@@ -842,6 +849,7 @@ export function App() {
   }
 
   async function importGenericCsv(file: File) {
+    setCsvImporting(true);
     setError('');
     setNotice('');
 
@@ -870,6 +878,8 @@ export function App() {
       await refreshOperationalData();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Failed to import CSV data');
+    } finally {
+      setCsvImporting(false);
     }
   }
 
@@ -945,6 +955,7 @@ export function App() {
   }
 
   async function runEngine() {
+    setEngineRunning(true);
     setError('');
     try {
       const result = await apiPost<{ scanned: number; generated: number; skipped: number }>(
@@ -963,10 +974,13 @@ export function App() {
       setJournalEntries(journalResponse.records);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Engine run failed');
+    } finally {
+      setEngineRunning(false);
     }
   }
 
   async function retryJournalEntry(entry: JournalEntry) {
+    setRetryingIds(prev => new Set(prev).add(entry.id));
     setError('');
     try {
       await apiPost(`/api/journal-entries/${entry.id}/retry`, {
@@ -976,6 +990,8 @@ export function App() {
       await refreshOperationalData();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Failed to request retry');
+    } finally {
+      setRetryingIds(prev => { const s = new Set(prev); s.delete(entry.id); return s; });
     }
   }
 
@@ -1172,6 +1188,7 @@ export function App() {
             setTransactionOffset={setTransactionOffset}
             transactions={transactions}
             transactionStats={transactionStats}
+            csvImporting={csvImporting}
           />
         ) : null}
         {screen === 'journal-log' ? (
@@ -1187,7 +1204,9 @@ export function App() {
             setDateTo={setJournalDateTo}
             loading={loading}
             runEngine={runEngine}
+            engineRunning={engineRunning}
             retryJournalEntry={retryJournalEntry}
+            retryingIds={retryingIds}
             selectedJournal={selectedJournal}
             selectJournal={setSelectedJournal}
             closeJournalDrawer={closeJournalDrawer}
@@ -1211,6 +1230,7 @@ export function App() {
             fieldSuggestions={fieldSuggestions}
             setRuleForm={setRuleForm}
             saveRule={saveRule}
+            ruleSaving={ruleSaving}
             openNewRule={openNewRule}
             closeRuleDrawer={closeRuleDrawer}
             editRule={editRule}
@@ -1272,6 +1292,15 @@ function NavButton({
   );
 }
 
+function Spinner() {
+  return (
+    <svg className="btn-spinner" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
+      <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function TransactionsView(props: {
   error: string;
   importGenericCsv: (file: File) => Promise<void>;
@@ -1280,6 +1309,7 @@ function TransactionsView(props: {
   loading: boolean;
   mapTransaction: (transaction: TransactionRecord) => void;
   csvImportEnabled: boolean;
+  csvImporting: boolean;
   selectedTransaction: TransactionRecord | null;
   selectTransaction: (transaction: TransactionRecord) => void;
   closeTransactionDrawer: () => void;
@@ -1307,6 +1337,7 @@ function TransactionsView(props: {
     loading,
     mapTransaction,
     csvImportEnabled,
+    csvImporting,
     selectedTransaction,
     selectTransaction,
     closeTransactionDrawer,
@@ -1357,8 +1388,8 @@ function TransactionsView(props: {
               if (file) void importGenericCsv(file);
             }}
           />
-          <button className="btn btn-primary" disabled={!csvImportEnabled} onClick={() => importInputRef.current?.click()}>
-            Import Data
+          <button className="btn btn-primary" disabled={!csvImportEnabled || csvImporting} onClick={() => importInputRef.current?.click()}>
+            {csvImporting ? <><Spinner />Importing…</> : 'Import Data'}
           </button>
         </div>
       </div>
@@ -1645,6 +1676,7 @@ function MappingRulesView(props: {
   fieldSuggestions: { productLines: string[]; billers: string[]; billerCategories: string[]; transactionTypes: string[] };
   setRuleForm: (updater: RuleFormState | ((current: RuleFormState) => RuleFormState)) => void;
   saveRule: (event: FormEvent) => void;
+  ruleSaving: boolean;
   openNewRule: () => void;
   closeRuleDrawer: () => void;
   editRule: (rule: MappingRule) => void;
@@ -1668,6 +1700,7 @@ function MappingRulesView(props: {
     fieldSuggestions,
     setRuleForm,
     saveRule,
+    ruleSaving,
     openNewRule,
     closeRuleDrawer,
     editRule,
@@ -1806,6 +1839,7 @@ function MappingRulesView(props: {
           fieldSuggestions={fieldSuggestions}
           setRuleForm={setRuleForm}
           saveRule={saveRule}
+          ruleSaving={ruleSaving}
           updateSplit={updateSplit}
           removeSplit={removeSplit}
           addEntry={addEntry}
@@ -1829,7 +1863,9 @@ function JournalLogView(props: {
   setDateTo: (value: string) => void;
   loading: boolean;
   runEngine: () => void;
+  engineRunning: boolean;
   retryJournalEntry: (entry: JournalEntry) => void;
+  retryingIds: Set<string>;
   selectedJournal: JournalEntry | null;
   selectJournal: (entry: JournalEntry) => void;
   closeJournalDrawer: () => void;
@@ -1849,7 +1885,9 @@ function JournalLogView(props: {
     setDateTo,
     loading,
     runEngine,
+    engineRunning,
     retryJournalEntry,
+    retryingIds,
     selectedJournal,
     selectJournal,
     closeJournalDrawer,
@@ -1882,8 +1920,8 @@ function JournalLogView(props: {
           <p>Double-entry records generated by the engine and queued for outbound accounting adapters</p>
         </div>
         <div className="page-actions">
-          <button className="btn btn-primary" onClick={runEngine}>
-            Run Engine Now
+          <button className="btn btn-primary" onClick={runEngine} disabled={engineRunning}>
+            {engineRunning ? <><Spinner />Running…</> : 'Run Engine Now'}
           </button>
         </div>
       </div>
@@ -1953,8 +1991,8 @@ function JournalLogView(props: {
                   <td><span className={`badge ${postingBadgeClass(entry.posting_status)}`}>{formatStatusLabel(entry.posting_status)}</span></td>
                   <td onClick={(event) => event.stopPropagation()}>
                     {['failed', 'retry_exhausted'].includes(entry.posting_status) ? (
-                      <button className="btn-link danger" onClick={() => void retryJournalEntry(entry)}>
-                        Retry
+                      <button className="btn-link danger" onClick={() => void retryJournalEntry(entry)} disabled={retryingIds.has(entry.id)}>
+                        {retryingIds.has(entry.id) ? 'Retrying…' : 'Retry'}
                       </button>
                     ) : (
                       <button className="btn-link primary" onClick={() => selectJournal(entry)}>View</button>
@@ -2011,6 +2049,7 @@ function JournalLogView(props: {
             accounts={accounts}
             entry={selectedJournal}
             retryJournalEntry={retryJournalEntry}
+            retryingIds={retryingIds}
             closeJournalDrawer={closeJournalDrawer}
           />
         ) : null}
@@ -2023,9 +2062,10 @@ function JournalDrawer(props: {
   accounts: ChartAccount[];
   entry: JournalEntry;
   retryJournalEntry: (entry: JournalEntry) => void;
+  retryingIds: Set<string>;
   closeJournalDrawer: () => void;
 }) {
-  const { accounts, entry, retryJournalEntry, closeJournalDrawer } = props;
+  const { accounts, entry, retryJournalEntry, retryingIds, closeJournalDrawer } = props;
   const transaction = entry.transaction;
 
   return (
@@ -2107,7 +2147,9 @@ function JournalDrawer(props: {
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-secondary btn-sm" onClick={closeJournalDrawer}>Close</button>
           {['failed', 'retry_exhausted'].includes(entry.posting_status) ? (
-            <button className="btn btn-danger btn-sm" onClick={() => void retryJournalEntry(entry)}>Retry Now</button>
+            <button className="btn btn-danger btn-sm" onClick={() => void retryJournalEntry(entry)} disabled={retryingIds.has(entry.id)}>
+              {retryingIds.has(entry.id) ? <><Spinner />Retrying…</> : 'Retry Now'}
+            </button>
           ) : null}
         </div>
       </div>
@@ -2123,13 +2165,14 @@ function RuleEditor(props: {
   fieldSuggestions: { productLines: string[]; billers: string[]; billerCategories: string[]; transactionTypes: string[] };
   setRuleForm: (updater: RuleFormState | ((current: RuleFormState) => RuleFormState)) => void;
   saveRule: (event: FormEvent) => void;
+  ruleSaving: boolean;
   updateSplit: (entryIndex: number, splitIndex: number, patch: Partial<CreditSplit>) => void;
   removeSplit: (entryIndex: number, splitIndex: number) => void;
   addEntry: () => void;
   removeEntry: (entryIndex: number) => void;
   closeRuleDrawer: () => void;
 }) {
-  const { accounts, error, ruleForm, entryCreditTotals, fieldSuggestions, setRuleForm, saveRule, updateSplit, removeSplit, addEntry, removeEntry, closeRuleDrawer } = props;
+  const { accounts, error, ruleForm, entryCreditTotals, fieldSuggestions, setRuleForm, saveRule, ruleSaving, updateSplit, removeSplit, addEntry, removeEntry, closeRuleDrawer } = props;
   const canSave = Boolean(ruleForm.productLine) &&
     ruleForm.entries.length > 0 &&
     ruleForm.entries.every((e, i) => e.debitAccountCode && entryCreditTotals[i] === 10000);
@@ -2255,7 +2298,9 @@ function RuleEditor(props: {
 
       <div className="drawer-footer">
         <button className="btn btn-ghost" type="button" onClick={closeRuleDrawer}>Cancel</button>
-        <button className="btn btn-primary" type="submit" disabled={!canSave}>{ruleForm.id ? 'Save Changes' : 'Save Rule'}</button>
+        <button className="btn btn-primary" type="submit" disabled={!canSave || ruleSaving}>
+          {ruleSaving ? <><Spinner />{ruleForm.id ? 'Saving…' : 'Saving…'}</> : ruleForm.id ? 'Save Changes' : 'Save Rule'}
+        </button>
       </div>
     </form>
   );
@@ -2327,7 +2372,7 @@ function ChangePasswordView(props: {
           </div>
           {error ? <div className="form-error">{error}</div> : null}
           <button className="btn btn-primary auth-submit" type="submit" disabled={submitting}>
-            {submitting ? 'Saving…' : 'Set Password & Continue'}
+            {submitting ? <><Spinner />Saving…</> : 'Set Password & Continue'}
           </button>
         </form>
       </section>
@@ -2405,7 +2450,7 @@ function LoginView(props: {
           </div>
           {localError || error ? <div className="form-error">{localError || error}</div> : null}
           <button className="btn btn-primary auth-submit" type="submit" disabled={submitting}>
-            {submitting ? 'Signing in…' : 'Sign In'}
+            {submitting ? <><Spinner />Signing in…</> : 'Sign In'}
           </button>
         </form>
       </section>
@@ -2571,6 +2616,10 @@ function UsersSettingsPanel(props: {
   const [editUserForm, setEditUserForm] = useState({ role: 'finance' as UserRole, status: 'active' as UserStatus });
   const [apiKeyForm, setApiKeyForm] = useState({ name: '', scopes: ['posting_batches:create', 'posting_batches:read'] as ApiScope[] });
   const [copiedId, setCopiedId] = useState('');
+  const [inviteSubmitting, setInviteSubmitting] = useState(false);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [keySubmitting, setKeySubmitting] = useState(false);
+  const [revokingIds, setRevokingIds] = useState<Set<string>>(new Set());
 
   function openEditUser(user: UserRecord) {
     setEditingUser(user);
@@ -2601,26 +2650,50 @@ function UsersSettingsPanel(props: {
 
   async function submitInvite(event: FormEvent) {
     event.preventDefault();
-    const password = generatePassword();
-    await inviteUser({ email: inviteForm.email, displayName: inviteForm.displayName || undefined, role: inviteForm.role, password });
-    setNewUserPassword(password);
-    setInviteForm({ email: '', displayName: '', role: 'finance' });
-    setInviteOpen(false);
+    setInviteSubmitting(true);
+    try {
+      const password = generatePassword();
+      await inviteUser({ email: inviteForm.email, displayName: inviteForm.displayName || undefined, role: inviteForm.role, password });
+      setNewUserPassword(password);
+      setInviteForm({ email: '', displayName: '', role: 'finance' });
+      setInviteOpen(false);
+    } finally {
+      setInviteSubmitting(false);
+    }
   }
 
   async function submitEditUser(event: FormEvent) {
     event.preventDefault();
     if (!editingUser) return;
-    await updateUser(editingUser, { role: editUserForm.role, status: editUserForm.status });
-    setEditUserOpen(false);
-    setEditingUser(null);
+    setEditSubmitting(true);
+    try {
+      await updateUser(editingUser, { role: editUserForm.role, status: editUserForm.status });
+      setEditUserOpen(false);
+      setEditingUser(null);
+    } finally {
+      setEditSubmitting(false);
+    }
   }
 
   async function submitApiKey(event: FormEvent) {
     event.preventDefault();
-    await createApiKey(apiKeyForm);
-    setApiKeyForm({ name: '', scopes: ['posting_batches:create', 'posting_batches:read'] });
-    setApiKeyOpen(false);
+    setKeySubmitting(true);
+    try {
+      await createApiKey(apiKeyForm);
+      setApiKeyForm({ name: '', scopes: ['posting_batches:create', 'posting_batches:read'] });
+      setApiKeyOpen(false);
+    } finally {
+      setKeySubmitting(false);
+    }
+  }
+
+  async function handleRevokeApiKey(apiKey: ApiKeyRecord) {
+    setRevokingIds(prev => new Set(prev).add(apiKey.id));
+    try {
+      await revokeApiKey(apiKey);
+    } finally {
+      setRevokingIds(prev => { const s = new Set(prev); s.delete(apiKey.id); return s; });
+    }
   }
 
   return (
@@ -2738,7 +2811,7 @@ function UsersSettingsPanel(props: {
                 <td className="dim">{apiKey.last_used_at ? formatDateTime(apiKey.last_used_at) : '—'}</td>
                 <td>
                   {apiKey.enabled
-                    ? <button className="btn-link danger" type="button" onClick={() => void revokeApiKey(apiKey)}>Revoke</button>
+                    ? <button className="btn-link danger" type="button" onClick={() => void handleRevokeApiKey(apiKey)} disabled={revokingIds.has(apiKey.id)}>{revokingIds.has(apiKey.id) ? 'Revoking…' : 'Revoke'}</button>
                     : <span className="dim" style={{ fontSize: 'var(--text-xs)' }}>—</span>}
                 </td>
               </tr>
@@ -2784,7 +2857,9 @@ function UsersSettingsPanel(props: {
         </div>
         <div className="drawer-footer">
           <button className="btn btn-ghost" type="button" onClick={() => setInviteOpen(false)}>Cancel</button>
-          <button className="btn btn-primary" type="submit">Add User</button>
+          <button className="btn btn-primary" type="submit" disabled={inviteSubmitting}>
+            {inviteSubmitting ? <><Spinner />Saving…</> : 'Add User'}
+          </button>
         </div>
       </form>
 
@@ -2818,7 +2893,9 @@ function UsersSettingsPanel(props: {
         </div>
         <div className="drawer-footer">
           <button className="btn btn-ghost" type="button" onClick={() => setEditUserOpen(false)}>Cancel</button>
-          <button className="btn btn-primary" type="submit">Save Changes</button>
+          <button className="btn btn-primary" type="submit" disabled={editSubmitting}>
+            {editSubmitting ? <><Spinner />Saving…</> : 'Save Changes'}
+          </button>
         </div>
       </form>
 
@@ -2870,7 +2947,9 @@ function UsersSettingsPanel(props: {
         </div>
         <div className="drawer-footer">
           <button className="btn btn-ghost" type="button" onClick={() => setApiKeyOpen(false)}>Cancel</button>
-          <button className="btn btn-primary" type="submit">Generate Key</button>
+          <button className="btn btn-primary" type="submit" disabled={keySubmitting}>
+            {keySubmitting ? <><Spinner />Generating…</> : 'Generate Key'}
+          </button>
         </div>
       </form>
     </div>
@@ -3031,9 +3110,11 @@ function CsvCoaImportPanel(props: {
             Template
           </button>
           <button className="btn btn-primary btn-sm" disabled={importing} onClick={() => fileRef.current?.click()}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 10V2M5 5l3-3 3 3" /><path d="M2 12h12" />
-            </svg>
+            {importing ? <Spinner /> : (
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M8 10V2M5 5l3-3 3 3" /><path d="M2 12h12" />
+              </svg>
+            )}
             {importing ? 'Importing…' : 'Import CSV'}
           </button>
           <input ref={fileRef} type="file" accept=".csv,.txt" style={{ display: 'none' }} onChange={handleFile} />
@@ -3201,7 +3282,7 @@ function SystemSettingsPanel(props: {
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--s2)' }}>
           <button className="btn btn-secondary" type="button" onClick={discard} disabled={saving}>Discard Changes</button>
-          <button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button>
+          <button className="btn btn-primary" type="submit" disabled={saving}>{saving ? <><Spinner />Saving…</> : 'Save Changes'}</button>
         </div>
       </form>
     </div>
@@ -3499,6 +3580,7 @@ function AdapterConfigDrawer(props: {
   const { adapter, onClose, onSave, pollStatus } = props;
   const template = adapter ? getAdapterConfigTemplate(adapter) : null;
   const formRef = useRef<HTMLFormElement | null>(null);
+  const [saving, setSaving] = useState(false);
 
   return (
     <>
@@ -3511,7 +3593,9 @@ function AdapterConfigDrawer(props: {
         onSubmit={(event) => {
           event.preventDefault();
           if (!adapter || !formRef.current) return;
-          void onSave(adapter, buildAdapterOperationalConfig(adapter, new FormData(formRef.current)));
+          setSaving(true);
+          void onSave(adapter, buildAdapterOperationalConfig(adapter, new FormData(formRef.current)))
+            .finally(() => setSaving(false));
         }}
       >
         <div className="drawer-header">
@@ -3548,7 +3632,9 @@ function AdapterConfigDrawer(props: {
           </span>
           <div className="drawer-actions">
             <button className="btn btn-ghost btn-sm" type="button" onClick={onClose}>Cancel</button>
-            <button className="btn btn-primary btn-sm" type="submit" disabled={!adapter}>Save Configuration</button>
+            <button className="btn btn-primary btn-sm" type="submit" disabled={!adapter || saving}>
+              {saving ? <><Spinner />Saving…</> : 'Save Configuration'}
+            </button>
           </div>
         </div>
       </form>
