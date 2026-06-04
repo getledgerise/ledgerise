@@ -1220,6 +1220,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
     const status = payload.status === undefined ? undefined : readUserStatus(payload.status);
     const password = readString(payload, 'password') ?? readString(payload, 'new_password');
 
+    if (demoMode && password) {
+      const targetUser = await accessStore.findUser({ operatorId: getOperatorId(request), userId: decodeURIComponent(userMatch[1] ?? '') });
+      if (targetUser?.email === process.env.LEDGERISE_BOOTSTRAP_ADMIN_EMAIL) {
+        sendJson(response, 403, { status: 'error', code: 'DEMO_MODE', message: 'The demo admin password cannot be changed.' });
+        return;
+      }
+    }
+
     if ((payload.role !== undefined && !role) || (payload.status !== undefined && !status)) {
       sendJson(response, 400, {
         status: 'error',
